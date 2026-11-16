@@ -19,7 +19,7 @@ async function main() {
   };
 
   const id = await redis.xadd(STREAM_NAME, '*', 'event', JSON.stringify(payload));
-  console.log(`✅ Emitted 'auth.user.registered' to stream '${STREAM_NAME}' with ID: ${id}`);
+  console.log(`[EventPublisher] Emitted 'auth.user.registered' to stream '${STREAM_NAME}' with ID: ${id}`);
   console.log('Payload:', JSON.stringify(payload, null, 2));
 
   await redis.quit();

@@ -23,9 +23,9 @@ try {
   parsedEnv = envSchema.parse(process.env);
 } catch (error) {
   if (error instanceof z.ZodError) {
-    console.error('❌ Invalid environment variables:', JSON.stringify(error.format(), null, 2));
+    console.error('[Config] Invalid environment variables:', JSON.stringify(error.format(), null, 2));
   } else {
-    console.error('❌ Failed to parse environment variables:', error);
+    console.error('[Config] Failed to parse environment variables:', error);
   }
   process.exit(1);
 }
