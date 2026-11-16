@@ -1,9 +1,7 @@
-import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
+export * from '../../lib/r2.js';
 
 /**
- * Media Module (Out of Scope for initial core-api task)
- * TODO: Cloudflare R2 presigned URLs, media metadata, avatar uploads.
+ * Media Module
+ * Core media routes (avatar & banner) are exposed at /me/avatar and /me/banner
+ * within profile.routes.ts for unified authenticated user management.
  */
-export const mediaRoutes: FastifyPluginAsync = async (_app: FastifyInstance) => {
-  // TODO: Media upload routes to be implemented in subsequent milestone
-};

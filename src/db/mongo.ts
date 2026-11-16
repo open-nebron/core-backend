@@ -1,14 +1,20 @@
 import { MongoClient, Db, Collection } from 'mongodb';
 import { env } from '../config/env.js';
 
+export type UserTheme = 'light' | 'dark' | 'system';
+
 export interface ProfileDocument {
   _id?: any;
   userId: string;
   username: string;
   name: string | null;
-  dateOfBirth: Date | null;
+  dateOfBirth: Date | string | null;
+  about: string | null;
   bio: string | null;
-  profilePicUrl: string | null;
+  language: string;
+  theme: UserTheme;
+  avatarKey: string | null;
+  bannerKey: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -41,6 +47,16 @@ export async function initMongoIndexes(database: Db): Promise<void> {
   await profiles.createIndex({ userId: 1 }, { unique: true, name: 'idx_profiles_userId_unique' });
   await profiles.createIndex({ username: 1 }, { unique: true, name: 'idx_profiles_username_unique' });
   // TODO: Add text index on name for user search when search module is implemented
+
+  // Migration: rename any legacy profilePicUrl field
+  try {
+    await profiles.updateMany(
+      { profilePicUrl: { $exists: true } } as any,
+      { $unset: { profilePicUrl: '' } } as any
+    );
+  } catch {
+    // Ignore migration error if already migrated
+  }
 }
 
 export function getDb(): Db {

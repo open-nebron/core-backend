@@ -6,16 +6,20 @@ export interface RateLimitOptions {
   limit: number;
   windowSeconds: number;
   keyPrefix: string;
+  keyGenerator?: (request: FastifyRequest) => string;
 }
 
 export function createRedisRateLimiter(options: RateLimitOptions) {
-  const { limit, windowSeconds, keyPrefix } = options;
+  const { limit, windowSeconds, keyPrefix, keyGenerator } = options;
 
   return async function rateLimitHook(request: FastifyRequest, reply: FastifyReply) {
     const redis = getRedisClient();
-    const ip = request.ip || request.headers['x-forwarded-for'] || 'unknown';
+    const identifier = keyGenerator
+      ? keyGenerator(request)
+      : request.ip || (request.headers['x-forwarded-for'] as string) || 'unknown';
+
     const currentWindow = Math.floor(Date.now() / 1000 / windowSeconds);
-    const redisKey = `${keyPrefix}:${ip}:${currentWindow}`;
+    const redisKey = `${keyPrefix}:${identifier}:${currentWindow}`;
 
     try {
       const pipeline = redis.pipeline();
@@ -42,8 +46,41 @@ export function createRedisRateLimiter(options: RateLimitOptions) {
   };
 }
 
+// 20 requests/min per IP for public username check
 export const checkUsernameRateLimiter = createRedisRateLimiter({
   limit: 20,
   windowSeconds: 60,
   keyPrefix: 'ratelimit:username_check',
+  keyGenerator: (req) => req.ip || (req.headers['x-forwarded-for'] as string) || 'unknown',
+});
+
+// User-keyed rate limiters
+const userKeyGen = (req: FastifyRequest) => req.user?.userId || req.ip || 'anonymous';
+
+export const uploadUrlRateLimiter = createRedisRateLimiter({
+  limit: 5,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:upload_url',
+  keyGenerator: userKeyGen,
+});
+
+export const confirmUploadRateLimiter = createRedisRateLimiter({
+  limit: 10,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:confirm_upload',
+  keyGenerator: userKeyGen,
+});
+
+export const patchMeRateLimiter = createRedisRateLimiter({
+  limit: 30,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:patch_me',
+  keyGenerator: userKeyGen,
+});
+
+export const deleteMediaRateLimiter = createRedisRateLimiter({
+  limit: 10,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:delete_media',
+  keyGenerator: userKeyGen,
 });

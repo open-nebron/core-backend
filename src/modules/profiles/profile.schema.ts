@@ -1,4 +1,11 @@
 import { z } from 'zod';
+import {
+  validateAbout,
+  validateBio,
+  validateDob,
+  validateLanguage,
+  validateNameField,
+} from './validate.js';
 import { sanitizeBio, sanitizeName } from '../../utils/sanitizer.js';
 
 export function isValidDobAtLeast13(dobStr: string): boolean {
@@ -35,27 +42,71 @@ export const patchMeSchema = z
   .object({
     name: z
       .string()
-      .min(1, 'Name must be at least 1 character')
-      .max(80, 'Name cannot exceed 80 characters')
+      .superRefine((val, ctx) => {
+        try {
+          validateNameField(val);
+        } catch (err: any) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: err.message });
+        }
+      })
       .transform(sanitizeName)
       .optional(),
     dateOfBirth: z
       .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date of birth must be in YYYY-MM-DD format')
-      .refine(isValidDobAtLeast13, {
-        message: 'You must be at least 13 years old to use Zenuxs',
+      .superRefine((val, ctx) => {
+        try {
+          validateDob(val);
+        } catch (err: any) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: err.message });
+        }
       })
+      .optional(),
+    about: z
+      .string()
+      .superRefine((val, ctx) => {
+        try {
+          validateAbout(val);
+        } catch (err: any) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: err.message });
+        }
+      })
+      .transform(sanitizeBio)
       .optional(),
     bio: z
       .string()
-      .max(300, 'Bio cannot exceed 300 characters')
+      .superRefine((val, ctx) => {
+        try {
+          validateBio(val);
+        } catch (err: any) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: err.message });
+        }
+      })
       .transform(sanitizeBio)
       .optional(),
+    language: z
+      .string()
+      .superRefine((val, ctx) => {
+        try {
+          validateLanguage(val);
+        } catch (err: any) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: err.message });
+        }
+      })
+      .transform((val) => val.trim().toLowerCase())
+      .optional(),
+    theme: z.enum(['light', 'dark', 'system']).optional(),
   })
+  .strict()
   .refine(
-    (data) => data.name !== undefined || data.dateOfBirth !== undefined || data.bio !== undefined,
+    (data) =>
+      data.name !== undefined ||
+      data.dateOfBirth !== undefined ||
+      data.about !== undefined ||
+      data.bio !== undefined ||
+      data.language !== undefined ||
+      data.theme !== undefined,
     {
-      message: 'At least one field (name, dateOfBirth, bio) must be provided',
+      message: 'At least one field (name, dateOfBirth, about, bio, language, theme) must be provided',
     }
   );
 
@@ -72,3 +123,16 @@ export const checkUsernameQuerySchema = z.object({
 });
 
 export type CheckUsernameQuery = z.infer<typeof checkUsernameQuerySchema>;
+
+export const uploadUrlSchema = z.object({
+  contentType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+  contentLength: z.number().int().positive('Content length must be a positive integer'),
+});
+
+export type UploadUrlInput = z.infer<typeof uploadUrlSchema>;
+
+export const confirmUploadSchema = z.object({
+  objectKey: z.string().min(1, 'objectKey is required'),
+});
+
+export type ConfirmUploadInput = z.infer<typeof confirmUploadSchema>;

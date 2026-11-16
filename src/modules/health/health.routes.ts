@@ -2,6 +2,9 @@ import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import { isMongoHealthy } from '../../db/mongo.js';
 import { isRedisHealthy } from '../../db/redis.js';
 import { jwksService } from '../../auth/jwks.js';
+import { env } from '../../config/env.js';
+import { cleanupOrphanedMedia } from '../../jobs/cleanup-orphans.js';
+import { UnauthorizedError } from '../../utils/errors.js';
 
 export const healthRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // Public health check for load balancer / k8s / docker compose
@@ -86,6 +89,39 @@ export const healthRoutes: FastifyPluginAsync = async (app: FastifyInstance) => 
       return reply.status(200).send({
         status: 'ok',
         jwks: jwksStatus,
+      });
+    }
+  );
+
+  // Internal endpoint for cron-based orphaned media cleanup
+  app.post(
+    '/internal/cleanup-orphans',
+    {
+      schema: {
+        description: 'Trigger cleanup of unconfirmed orphaned media files older than 24 hours',
+        tags: ['Internal'],
+        headers: {
+          type: 'object',
+          properties: {
+            'x-internal-token': { type: 'string' },
+            authorization: { type: 'string' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const tokenHeader =
+        (request.headers['x-internal-token'] as string) ||
+        (request.headers.authorization?.replace(/^Bearer\s+/i, '') as string);
+
+      if (!tokenHeader || tokenHeader !== env.INTERNAL_TOKEN) {
+        throw new UnauthorizedError('Invalid or missing internal authorization token');
+      }
+
+      const result = await cleanupOrphanedMedia();
+      return reply.status(200).send({
+        status: 'ok',
+        ...result,
       });
     }
   );

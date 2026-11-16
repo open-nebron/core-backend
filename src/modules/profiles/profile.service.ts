@@ -1,27 +1,44 @@
-import { getProfilesCollection, type ProfileDocument } from '../../db/mongo.js';
+import { getProfilesCollection, type ProfileDocument, type UserTheme } from '../../db/mongo.js';
 import { validateUsername } from './username.rules.js';
 import { generateUniqueUsername } from './username.generator.js';
 import { BadRequestError, ConflictError, NotFoundError } from '../../utils/errors.js';
+import { computePublicUrl, deleteObject, type MediaKind } from '../../lib/r2.js';
+import { env } from '../../config/env.js';
 
 export interface ProfileResponse {
   userId: string;
   username: string;
   name: string | null;
   dateOfBirth: string | null;
+  about: string | null;
   bio: string | null;
-  profilePicUrl: string | null;
+  language: string;
+  theme: UserTheme;
+  avatarUrl: string | null;
+  bannerUrl: string | null;
   createdAt: string;
   updatedAt?: string;
 }
 
 export function formatProfileResponse(doc: ProfileDocument): ProfileResponse {
+  let dobStr: string | null = null;
+  if (doc.dateOfBirth) {
+    dobStr = typeof doc.dateOfBirth === 'string'
+      ? doc.dateOfBirth
+      : doc.dateOfBirth.toISOString().split('T')[0];
+  }
+
   return {
     userId: doc.userId,
     username: doc.username,
     name: doc.name ?? null,
-    dateOfBirth: doc.dateOfBirth ? doc.dateOfBirth.toISOString().split('T')[0] : null,
+    dateOfBirth: dobStr,
+    about: doc.about ?? null,
     bio: doc.bio ?? null,
-    profilePicUrl: doc.profilePicUrl ?? null,
+    language: doc.language || env.DEFAULT_LANGUAGE,
+    theme: doc.theme || 'system',
+    avatarUrl: computePublicUrl(doc.avatarKey, doc.updatedAt),
+    bannerUrl: computePublicUrl(doc.bannerKey, doc.updatedAt),
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt ? doc.updatedAt.toISOString() : undefined,
   };
@@ -49,7 +66,14 @@ export class ProfileService {
 
   async updateProfile(
     userId: string,
-    data: { name?: string; dateOfBirth?: string; bio?: string }
+    data: {
+      name?: string;
+      dateOfBirth?: string;
+      about?: string;
+      bio?: string;
+      language?: string;
+      theme?: UserTheme;
+    }
   ): Promise<ProfileDocument> {
     const collection = getProfilesCollection();
 
@@ -57,16 +81,48 @@ export class ProfileService {
       updatedAt: new Date(),
     };
 
-    if (data.name !== undefined) {
-      updateFields.name = data.name;
+    if (data.name !== undefined) updateFields.name = data.name;
+    if (data.dateOfBirth !== undefined) updateFields.dateOfBirth = data.dateOfBirth;
+    if (data.about !== undefined) updateFields.about = data.about;
+    if (data.bio !== undefined) updateFields.bio = data.bio;
+    if (data.language !== undefined) updateFields.language = data.language;
+    if (data.theme !== undefined) updateFields.theme = data.theme;
+
+    const result = await collection.findOneAndUpdate(
+      { userId },
+      { $set: updateFields },
+      { returnDocument: 'after' }
+    );
+
+    if (!result) {
+      throw new NotFoundError('Profile not found', 'profile_not_found');
     }
 
-    if (data.dateOfBirth !== undefined) {
-      updateFields.dateOfBirth = new Date(data.dateOfBirth);
+    return result;
+  }
+
+  async updateMediaKey(
+    userId: string,
+    kind: MediaKind,
+    newKey: string | null
+  ): Promise<ProfileDocument> {
+    const collection = getProfilesCollection();
+    const existing = await this.getProfileByUserId(userId);
+
+    if (!existing) {
+      throw new NotFoundError('Profile not found', 'profile_not_found');
     }
 
-    if (data.bio !== undefined) {
-      updateFields.bio = data.bio;
+    const previousKey = kind === 'avatar' ? existing.avatarKey : existing.bannerKey;
+
+    const updateFields: Partial<ProfileDocument> = {
+      updatedAt: new Date(),
+    };
+
+    if (kind === 'avatar') {
+      updateFields.avatarKey = newKey;
+    } else {
+      updateFields.bannerKey = newKey;
     }
 
     const result = await collection.findOneAndUpdate(
@@ -77,6 +133,13 @@ export class ProfileService {
 
     if (!result) {
       throw new NotFoundError('Profile not found', 'profile_not_found');
+    }
+
+    // Best effort async delete of the previous object if replaced or removed
+    if (previousKey && previousKey !== newKey) {
+      deleteObject(previousKey).catch((err) => {
+        console.warn(`[R2] Warning: failed to delete previous ${kind} key '${previousKey}':`, err);
+      });
     }
 
     return result;
@@ -135,8 +198,12 @@ export class ProfileService {
       username,
       name: null,
       dateOfBirth: null,
+      about: null,
       bio: null,
-      profilePicUrl: null,
+      language: env.DEFAULT_LANGUAGE,
+      theme: 'system',
+      avatarKey: null,
+      bannerKey: null,
       createdAt: now,
       updatedAt: now,
     };

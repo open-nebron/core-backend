@@ -131,8 +131,12 @@ describe('Profile and Health API Routes', () => {
         username: 'the_one',
         name: 'Thomas Anderson',
         dateOfBirth: new Date('1990-03-11'),
+        about: null,
         bio: 'There is no spoon.',
-        profilePicUrl: null,
+        language: 'en',
+        theme: 'system',
+        avatarKey: null,
+        bannerKey: null,
         createdAt: now,
         updatedAt: now,
       });
@@ -152,9 +156,14 @@ describe('Profile and Health API Routes', () => {
         username: 'the_one',
         name: 'Thomas Anderson',
         dateOfBirth: '1990-03-11',
+        about: null,
         bio: 'There is no spoon.',
-        profilePicUrl: null,
+        language: 'en',
+        theme: 'system',
+        avatarUrl: null,
+        bannerUrl: null,
         createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
       });
     });
   });
