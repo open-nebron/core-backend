@@ -1,0 +1,71 @@
+services:
+  core-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zenuxs-core-api
+    ports:
+      - "4002:4002"
+    environment:
+      - PORT=4002
+      - MONGO_URL=mongodb://mongo:27017/zenuxs_core
+      - REDIS_URL=redis://redis:6379
+      - AUTH_JWKS_URL=http://auth:4001/.well-known/jwks.json
+      - EVENTS_STREAM=zenuxs.events
+      - ALLOWED_ORIGINS=http://localhost:3000,http://localhost:8081
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth:
+        condition: service_started
+    restart: unless-stopped
+
+  auth:
+    image: node:20-alpine
+    container_name: zenuxs-auth-mock
+    working_dir: /app
+    volumes:
+      - ./scripts/mock-auth.js:/app/mock-auth.js:ro
+      - ./package.json:/app/package.json:ro
+    command: sh -c "npm install jose@^6.2.17 && node mock-auth.js"
+    ports:
+      - "4001:4001"
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7.0
+    container_name: zenuxs-core-mongo
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: zenuxs-core-redis
+    ports:
+      - "6389:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 3s
+    restart: unless-stopped
+
+volumes:
+  mongo-data:
+  redis-data:
