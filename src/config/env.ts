@@ -6,7 +6,7 @@ dotenv.config();
 const envSchema = z
   .object({
     PORT: z.coerce.number().default(4002),
-    MONGO_URL: z.string().default('mongodb://mongo:27017/zenuxs_core'),
+    MONGO_URL: z.string().default('mongodb://mongo:27017/nebron_core'),
     REDIS_URL: z.string().default('redis://redis:6379'),
     AUTH_JWKS_URL: z.string().url().default('http://auth:4001/.well-known/jwks.json'),
     EVENTS_STREAM: z.string().default('zenuxs.events'),

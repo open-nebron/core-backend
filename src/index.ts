@@ -12,7 +12,7 @@ async function bootstrap() {
   try {
     console.log(`[CoreAPI] Connecting to MongoDB at ${env.MONGO_URL}...`);
     await connectMongo();
-    console.log('[CoreAPI] Connected to MongoDB (zenuxs_core)');
+    console.log('[CoreAPI] Connected to MongoDB (nebron_core)');
   } catch (err: any) {
     console.error('[CoreAPI] Failed to connect to MongoDB:', err.message);
     process.exit(1);

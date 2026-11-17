@@ -4,7 +4,7 @@ Production-grade core backend microservice for the Zenuxs polyrepo platform.
 
 ## Architecture & Responsibilities
 
-- **Database Ownership**: Owns and manages the `zenuxs_core` MongoDB database. Never reads or writes to sibling databases.
+- **Database Ownership**: Owns and manages the `nebron_core` MongoDB database. Never reads or writes to sibling databases.
 - **Stateless JWT Verification**: Never issues tokens. Verifies RS256 Bearer access tokens against `auth-service`'s JWKS endpoint (`AUTH_JWKS_URL`).
 - **In-Memory JWKS Cache**: Caches public keys in memory for 10 minutes with background refresh. Fastify pre-handler verifies tokens locally without synchronous calls to `auth-service`.
 - **Event-Driven Profile Creation**: Consumes Redis Stream `zenuxs.events` (consumer group `core-api`) to handle `auth.user.registered` events and automatically create profile documents with auto-generated unique usernames.
@@ -129,7 +129,7 @@ node scripts/emit-event.js usr_john_01 john.doe@zenuxs.io
 Verify profile creation in MongoDB:
 
 ```bash
-docker exec -it zenuxs-core-mongo mongosh zenuxs_core --eval 'db.profiles.findOne({ userId: "usr_john_01" })'
+docker exec -it zenuxs-core-mongo mongosh nebron_core --eval 'db.profiles.findOne({ userId: "usr_john_01" })'
 ```
 
 ---
@@ -236,7 +236,7 @@ npm run dev
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `PORT` | `4002` | Server port |
-| `MONGO_URL` | `mongodb://mongo:27017/zenuxs_core` | MongoDB connection URL |
+| `MONGO_URL` | `mongodb://mongo:27017/nebron_core` | MongoDB connection URL |
 | `REDIS_URL` | `redis://redis:6379` | Redis connection URL |
 | `AUTH_JWKS_URL` | `http://auth:4001/.well-known/jwks.json` | JWKS endpoint of auth-service |
 | `EVENTS_STREAM` | `zenuxs.events` | Redis stream for platform events |
