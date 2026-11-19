@@ -84,3 +84,33 @@ export const deleteMediaRateLimiter = createRedisRateLimiter({
   keyPrefix: 'ratelimit:delete_media',
   keyGenerator: userKeyGen,
 });
+
+// Relationship rate limiters
+export const blockRateLimiter = createRedisRateLimiter({
+  limit: 30,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:rel_block',
+  keyGenerator: userKeyGen,
+});
+
+export const muteRateLimiter = createRedisRateLimiter({
+  limit: 30,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:rel_mute',
+  keyGenerator: userKeyGen,
+});
+
+export const getRelationshipRateLimiter = createRedisRateLimiter({
+  limit: 300,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:rel_get',
+  keyGenerator: userKeyGen,
+});
+
+export const checkRelationshipsRateLimiter = createRedisRateLimiter({
+  limit: 600,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:rel_check',
+  keyGenerator: (req) =>
+    (req.headers['x-internal-token'] as string) || req.ip || 'internal',
+});

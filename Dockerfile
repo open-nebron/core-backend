@@ -7,6 +7,7 @@ WORKDIR /app
 
 # Copy dependency manifests
 COPY package*.json tsconfig.json ./
+COPY vendor/ ./vendor/
 
 # Install all dependencies (including devDependencies for build)
 RUN npm ci
@@ -27,6 +28,7 @@ ENV PORT=4002
 
 # Copy package manifests and install only production dependencies
 COPY package*.json ./
+COPY vendor/ ./vendor/
 RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy compiled files from builder

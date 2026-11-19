@@ -50,6 +50,42 @@ export class RateLimitError extends AppError {
   }
 }
 
+export class SelfActionNotAllowedError extends AppError {
+  constructor(message: string = 'Self action is not allowed') {
+    super(400, 'self_action_not_allowed', message);
+  }
+}
+
+export class EmptyMuteError extends AppError {
+  constructor(message: string = 'Mute request body is empty or invalid') {
+    super(400, 'empty_mute', message);
+  }
+}
+
+export class InvalidUntilError extends AppError {
+  constructor(message: string = 'Mute until date must be in the future') {
+    super(400, 'invalid_until', message);
+  }
+}
+
+export class InvalidUuidError extends AppError {
+  constructor(message: string = 'Invalid user ID format') {
+    super(400, 'invalid_uuid', message);
+  }
+}
+
+export class InvalidInternalTokenError extends AppError {
+  constructor(message: string = 'Invalid or missing internal token') {
+    super(401, 'invalid_internal_token', message);
+  }
+}
+
+export class InternalNotConfiguredError extends AppError {
+  constructor(message: string = 'Internal service token not configured') {
+    super(503, 'internal_not_configured', message);
+  }
+}
+
 export function fastifyErrorHandler(
   error: FastifyError | Error,
   request: FastifyRequest,

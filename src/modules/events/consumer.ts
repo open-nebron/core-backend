@@ -70,29 +70,39 @@ export class RedisStreamEventConsumer implements EventConsumer {
     }
   }
 
+  private getStreams(): string[] {
+    const list = [this.streamName];
+    if (this.streamName !== 'zenuxs.events') {
+      list.push('zenuxs.events');
+    }
+    return list;
+  }
+
   private async initConsumerGroup(): Promise<void> {
     if (!this.redis) return;
-    try {
-      // Create stream and consumer group if it doesn't already exist
-      await this.redis.xgroup('CREATE', this.streamName, this.groupName, '$', 'MKSTREAM');
-      console.log(`[EventConsumer] Created consumer group '${this.groupName}' on stream '${this.streamName}'`);
-    } catch (err: any) {
-      if (err.message && err.message.includes('BUSYGROUP')) {
-        // Consumer group already exists, this is normal
-        console.log(`[EventConsumer] Consumer group '${this.groupName}' already exists`);
-      } else {
-        console.error(`[EventConsumer] Error creating consumer group:`, err.message);
+    for (const stream of this.getStreams()) {
+      try {
+        await this.redis.xgroup('CREATE', stream, this.groupName, '$', 'MKSTREAM');
+        console.log(`[EventConsumer] Created consumer group '${this.groupName}' on stream '${stream}'`);
+      } catch (err: any) {
+        if (err.message && err.message.includes('BUSYGROUP')) {
+          console.log(`[EventConsumer] Consumer group '${this.groupName}' on stream '${stream}' already exists`);
+        } else {
+          console.error(`[EventConsumer] Error creating consumer group on '${stream}':`, err.message);
+        }
       }
     }
   }
 
   private async consumeLoop(): Promise<void> {
+    const streams = this.getStreams();
     console.log(
-      `[EventConsumer] Started consuming stream '${this.streamName}' as group '${this.groupName}', consumer '${this.consumerName}'`
+      `[EventConsumer] Started consuming streams [${streams.join(', ')}] as group '${this.groupName}', consumer '${this.consumerName}'`
     );
 
     while (this.isRunning && this.redis) {
       try {
+        const streamIds = streams.map(() => '>');
         // Read new messages from group
         const response = (await (this.redis as any).xreadgroup(
           'GROUP',
@@ -103,8 +113,8 @@ export class RedisStreamEventConsumer implements EventConsumer {
           'COUNT',
           10,
           'STREAMS',
-          this.streamName,
-          '>'
+          ...streams,
+          ...streamIds
         )) as [string, [string, string[]][]][] | null;
 
         if (!response || response.length === 0) {
@@ -113,7 +123,7 @@ export class RedisStreamEventConsumer implements EventConsumer {
 
         for (const [stream, messages] of response) {
           for (const [messageId, rawFields] of messages) {
-            await this.processMessage(messageId, rawFields);
+            await this.processMessage(stream, messageId, rawFields);
           }
         }
       } catch (err: any) {
@@ -181,7 +191,24 @@ export class RedisStreamEventConsumer implements EventConsumer {
     };
   }
 
-  private async processMessage(messageId: string, rawFields: string[]): Promise<void> {
+  private async processMessage(
+    streamOrMessageId: string,
+    messageIdOrRawFields: any,
+    maybeRawFields?: string[]
+  ): Promise<void> {
+    let stream = this.streamName;
+    let messageId: string;
+    let rawFields: string[];
+
+    if (maybeRawFields !== undefined) {
+      stream = streamOrMessageId;
+      messageId = messageIdOrRawFields;
+      rawFields = maybeRawFields;
+    } else {
+      messageId = streamOrMessageId;
+      rawFields = messageIdOrRawFields;
+    }
+
     const fields = this.parseMessageFields(rawFields);
     const event = this.parseEvent(messageId, fields);
 
@@ -190,7 +217,7 @@ export class RedisStreamEventConsumer implements EventConsumer {
       await handleEvent(event);
 
       // Acknowledge only after successful processing
-      await this.redis?.xack(this.streamName, this.groupName, messageId);
+      await this.redis?.xack(stream, this.groupName, messageId);
       this.retryCounts.delete(messageId);
     } catch (err: any) {
       console.error(
@@ -206,9 +233,9 @@ export class RedisStreamEventConsumer implements EventConsumer {
           `[EventConsumer] Message ${messageId} exceeded max retries (${this.maxRetries}). Routing to DLQ '${this.dlqStream}'`
         );
         try {
-          await this.routeToDlq(messageId, event, fields, err.message);
+          await this.routeToDlq(stream, messageId, event, fields, err.message);
           // ACK from primary stream after successfully moving to DLQ
-          await this.redis?.xack(this.streamName, this.groupName, messageId);
+          await this.redis?.xack(stream, this.groupName, messageId);
           this.retryCounts.delete(messageId);
         } catch (dlqErr: any) {
           console.error(`[EventConsumer] Failed to write message ${messageId} to DLQ:`, dlqErr.message);
@@ -227,6 +254,7 @@ export class RedisStreamEventConsumer implements EventConsumer {
   }
 
   private async routeToDlq(
+    originalStream: string,
     originalId: string,
     event: ZenuxsEvent,
     rawFields: Record<string, string>,
@@ -235,12 +263,12 @@ export class RedisStreamEventConsumer implements EventConsumer {
     if (!this.redis) return;
 
     await this.redis.xadd(
-      this.dlqStream,
+      `${originalStream}.dlq`,
       '*',
       'originalId',
       originalId,
       'originalStream',
-      this.streamName,
+      originalStream,
       'eventType',
       event.type,
       'error',

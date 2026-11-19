@@ -6,10 +6,10 @@ dotenv.config();
 const envSchema = z
   .object({
     PORT: z.coerce.number().default(4002),
-    MONGO_URL: z.string().default('mongodb://mongo:27017/nebron_core'),
-    REDIS_URL: z.string().default('redis://redis:6379'),
+    MONGO_URL: z.string().default('mongodb://localhost:27017/nebron_core'),
+    REDIS_URL: z.string().default('redis://localhost:6379'),
     AUTH_JWKS_URL: z.string().url().default('http://auth:4001/.well-known/jwks.json'),
-    EVENTS_STREAM: z.string().default('zenuxs.events'),
+    EVENTS_STREAM: z.string().default('nebron.events'),
     EVENTS_GROUP: z.string().default('core-api'),
     ALLOWED_ORIGINS: z.string().default('http://localhost:3000,http://localhost:8081'),
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),

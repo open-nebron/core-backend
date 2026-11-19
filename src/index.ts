@@ -6,7 +6,7 @@ import { eventConsumer } from './modules/events/consumer.js';
 import { buildApp } from './app.js';
 
 async function bootstrap() {
-  console.log('[CoreAPI] Starting Zenuxs Core API...');
+  console.log('[CoreAPI] Starting Nebron Core API...');
 
   // 1. Connect MongoDB
   try {

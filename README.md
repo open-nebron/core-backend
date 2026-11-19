@@ -1,6 +1,6 @@
-# Zenuxs Core API (`core-api`)
+# Nebron Core API (`core-api`)
 
-Production-grade core backend microservice for the Zenuxs polyrepo platform.
+Production-grade core backend microservice for the Nebron polyrepo platform.
 
 ## Architecture & Responsibilities
 
@@ -43,6 +43,12 @@ Production-grade core backend microservice for the Zenuxs polyrepo platform.
 | `POST` | `/me/banner/upload-url` | Yes | 5/min per user | Generate presigned POST slot for banner upload ($\le 10$ MB) |
 | `POST` | `/me/banner/confirm` | Yes | 10/min per user | Confirm banner upload, verify object in R2, delete old banner |
 | `DELETE`| `/me/banner` | Yes | 10/min per user | Remove banner from profile and async delete from storage |
+| `POST` | `/relationships/:userId/block` | Yes | 30/min per user | Block a user (rejects self-action) |
+| `DELETE`| `/relationships/:userId/block` | Yes | 30/min per user | Unblock a user |
+| `POST` | `/relationships/:userId/mute` | Yes | 30/min per user | Mute calls and/or messages from a user |
+| `DELETE`| `/relationships/:userId/mute` | Yes | 30/min per user | Unmute calls and messages from a user |
+| `GET` | `/relationships/:userId` | Yes | 300/min per user | Get caller relationship with user (returns zero-state if none) |
+| `GET` | `/relationships/check` | Token | 600/min | Internal batch check block/mute state against user IDs |
 | `GET` | `/health` | No | - | Service readiness (Mongo, Redis, JWKS) |
 | `GET` | `/internal/health` | No | - | Internal cache status and JWKS age |
 | `POST` | `/internal/cleanup-orphans` | Token | - | Clean up unconfirmed uploads older than 24 hours |
@@ -206,6 +212,113 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:4002/me | jq .avatarU
 #### Step 5: Remove avatar (idempotent)
 ```bash
 curl -i -X DELETE -H "Authorization: Bearer $TOKEN" http://localhost:4002/me/avatar
+```
+
+---
+
+## Relationships
+
+Manages per-user-pair block and mute state, stored in MongoDB (`nebron_core.relationships`) and published to Redis Streams (`nebron.events`).
+
+### Downstream Service Event Consumption
+
+- **`chat-service`**: Consumes `core.relationship.blocked` and `core.relationship.unblocked` to silently drop incoming direct messages sent by blocked users. Consumes `core.relationship.muted` and `core.relationship.unmuted` to suppress typing indicators and presence notifications for muted users.
+- **`voice-service`**: Consumes relationship events to reject or drop incoming WebRTC calls from blocked users or users with `muteCalls: true`.
+- **`GET /relationships/check`**: Requires the `X-Internal-Token` header matching the `INTERNAL_TOKEN` environment variable. Designed exclusively for internal service-to-service calls (e.g. `chat-service` WebSocket connection handshakes) to batch-check block and mute states in a single query.
+
+### Curl Examples
+
+#### 1. Block a User
+```bash
+curl -i -X POST http://localhost:4002/relationships/65123456789abcdef0123456/block \
+  -H "Authorization: Bearer $TOKEN"
+```
+Response: `204 No Content`
+
+#### 2. Unblock a User
+```bash
+curl -i -X DELETE http://localhost:4002/relationships/65123456789abcdef0123456/block \
+  -H "Authorization: Bearer $TOKEN"
+```
+Response: `204 No Content`
+
+#### 3. Mute a User
+Mute calls and messages, optionally until an ISO 8601 future timestamp:
+```bash
+curl -s -X POST http://localhost:4002/relationships/65123456789abcdef0123456/mute \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "calls": true,
+    "messages": true,
+    "until": "2026-12-31T23:59:59.000Z"
+  }' | jq
+```
+Response:
+```json
+{
+  "calls": true,
+  "messages": true,
+  "until": "2026-12-31T23:59:59.000Z"
+}
+```
+
+#### 4. Unmute a User
+```bash
+curl -i -X DELETE http://localhost:4002/relationships/65123456789abcdef0123456/mute \
+  -H "Authorization: Bearer $TOKEN"
+```
+Response: `204 No Content`
+
+#### 5. Get Relationship State with a User
+```bash
+curl -s http://localhost:4002/relationships/65123456789abcdef0123456 \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+Response (if no record exists, returns zero-state):
+```json
+{
+  "blocked": false,
+  "mute": {
+    "calls": false,
+    "messages": false,
+    "until": null
+  }
+}
+```
+
+#### 6. Internal Batch Check
+```bash
+curl -s "http://localhost:4002/relationships/check?fromUserId=caller_user_id&userIds=user_1,user_2,unknown_user" \
+  -H "X-Internal-Token: dev-internal-token" | jq
+```
+Response:
+```json
+{
+  "data": {
+    "user_1": {
+      "blocked": true,
+      "muted": {
+        "calls": false,
+        "messages": false
+      }
+    },
+    "user_2": {
+      "blocked": false,
+      "muted": {
+        "calls": true,
+        "messages": true
+      }
+    },
+    "unknown_user": {
+      "blocked": false,
+      "muted": {
+        "calls": false,
+        "messages": false
+      }
+    }
+  }
+}
 ```
 
 ---

@@ -6,6 +6,7 @@ import { fastifyErrorHandler } from './utils/errors.js';
 import { registerSwagger } from './plugins/swagger.js';
 import { profileRoutes } from './modules/profiles/profile.routes.js';
 import { healthRoutes } from './modules/health/health.routes.js';
+import { relationshipRoutes } from './modules/relationships/routes.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
   const isDev = env.NODE_ENV === 'development';
@@ -70,6 +71,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Register modules
   await app.register(healthRoutes);
   await app.register(profileRoutes);
+  await app.register(relationshipRoutes);
 
   return app;
 }

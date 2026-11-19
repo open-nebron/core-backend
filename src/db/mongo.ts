@@ -48,6 +48,16 @@ export async function initMongoIndexes(database: Db): Promise<void> {
   await profiles.createIndex({ username: 1 }, { unique: true, name: 'idx_profiles_username_unique' });
   // TODO: Add text index on name for user search when search module is implemented
 
+  const relationships = database.collection('relationships');
+  await relationships.createIndex(
+    { fromUserId: 1, toUserId: 1 },
+    { unique: true, name: 'idx_relationships_from_to_unique' }
+  );
+  await relationships.createIndex(
+    { fromUserId: 1, blocked: 1 },
+    { name: 'idx_relationships_from_blocked' }
+  );
+
   // Migration: rename any legacy profilePicUrl field
   try {
     await profiles.updateMany(
