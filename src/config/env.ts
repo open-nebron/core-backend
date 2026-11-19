@@ -20,8 +20,8 @@ const envSchema = z
     R2_ENDPOINT: z.string().default('http://localhost:9000'),
     R2_ACCESS_KEY_ID: z.string().default('minioadmin'),
     R2_SECRET_ACCESS_KEY: z.string().default('minioadmin'),
-    R2_BUCKET: z.string().default('zenuxs-media'),
-    R2_PUBLIC_BASE_URL: z.string().default('https://media.zenuxs.com'),
+    R2_BUCKET: z.string().default('nebron-media'),
+    R2_PUBLIC_BASE_URL: z.string().default('https://media.nebron.com'),
     MAX_AVATAR_BYTES: z.coerce.number().default(5242880), // 5 MB
     MAX_BANNER_BYTES: z.coerce.number().default(10485760), // 10 MB
 

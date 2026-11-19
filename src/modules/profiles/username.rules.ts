@@ -5,7 +5,7 @@ export const RESERVED_USERNAMES = new Set([
   'root',
   'system',
   'support',
-  'zenuxs',
+  'nebron',
   'api',
   'auth',
   'chat',
@@ -29,7 +29,7 @@ export interface UsernameValidationResult {
 }
 
 /**
- * Validates a username according to Zenuxs core rules:
+ * Validates a username according to Nebron core rules:
  * - 3–20 chars
  * - allowed: lowercase a-z, digits 0-9, underscore _, dot .
  * - must start with a letter

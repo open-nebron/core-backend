@@ -13,7 +13,7 @@ describe('Media Uploads and User Preferences API', () => {
   let app: FastifyInstance;
   let validToken: string;
   const mockUserId = 'usr_media_test_1';
-  const mockEmail = 'media.user@zenuxs.io';
+  const mockEmail = 'media.user@nebron.io';
 
   const initialProfile: mongoDb.ProfileDocument = {
     userId: mockUserId,

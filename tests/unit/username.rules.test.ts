@@ -80,8 +80,8 @@ describe('Username Validation Rules', () => {
   it('rejects reserved username even with mixed casing', () => {
     expect(validateUsername('ADMIN').ok).toBe(false);
     expect(validateUsername('ADMIN').reason).toBe('reserved');
-    expect(validateUsername('ZeNuXs').ok).toBe(false);
-    expect(validateUsername('ZeNuXs').reason).toBe('reserved');
+    expect(validateUsername('NeBrOn').ok).toBe(false);
+    expect(validateUsername('NeBrOn').reason).toBe('reserved');
   });
 
   it('rejects profane words using bad-words', () => {

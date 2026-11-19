@@ -8,11 +8,11 @@ export interface SessionRevokedPayload {
   sessionId?: string;
 }
 
-export type ZenuxsEventType = 'auth.user.registered' | 'auth.session.revoked' | string;
+export type NebronEventType = 'auth.user.registered' | 'auth.session.revoked' | string;
 
-export interface ZenuxsEvent<T = any> {
+export interface NebronEvent<T = any> {
   id?: string;
-  type: ZenuxsEventType;
+  type: NebronEventType;
   data: T;
   timestamp?: string;
 }

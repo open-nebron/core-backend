@@ -334,7 +334,7 @@ describe('Profile and Health API Routes', () => {
           authorization: `Bearer ${validToken}`,
         },
         payload: {
-          username: 'zenuxs',
+          username: 'nebron',
         },
       });
 

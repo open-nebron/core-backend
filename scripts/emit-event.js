@@ -1,13 +1,13 @@
 import { Redis } from 'ioredis';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const STREAM_NAME = process.env.EVENTS_STREAM || 'zenuxs.events';
+const STREAM_NAME = process.env.EVENTS_STREAM || 'nebron.events';
 
 async function main() {
   const redis = new Redis(REDIS_URL);
 
   const userId = process.argv[2] || `usr_${Date.now()}`;
-  const email = process.argv[3] || `alex.smith_${Math.floor(Math.random() * 1000)}@zenuxs.io`;
+  const email = process.argv[3] || `alex.smith_${Math.floor(Math.random() * 1000)}@nebron.io`;
 
   const payload = {
     type: 'auth.user.registered',

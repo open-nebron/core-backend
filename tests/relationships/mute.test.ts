@@ -8,7 +8,7 @@ import * as mongoDb from '../../src/db/mongo.js';
 import { getRedisClient, closeRedis } from '../../src/db/redis.js';
 import { jwksService } from '../../src/auth/jwks.js';
 import { getOrCreateTestAuthKeys, createMockAccessToken } from '../mocks/jwt.mock.js';
-import { parseEvent } from '@zenuxs/contracts';
+import { parseEvent } from '@nebron/contracts';
 
 describe('Relationships - Mute / Unmute Module', () => {
   let app: FastifyInstance;

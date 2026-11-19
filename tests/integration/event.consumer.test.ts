@@ -8,9 +8,9 @@ describe('Event Consumer Layer', () => {
 
   beforeEach(() => {
     consumer = new RedisStreamEventConsumer({
-      streamName: 'zenuxs.events',
+      streamName: 'nebron.events',
       groupName: 'core-api',
-      dlqStream: 'zenuxs.events.dlq',
+      dlqStream: 'nebron.events.dlq',
       maxRetries: 3,
       backoffBaseMs: 0,
     });
@@ -21,50 +21,50 @@ describe('Event Consumer Layer', () => {
       const fields = {
         event: JSON.stringify({
           type: 'auth.user.registered',
-          data: { userId: 'usr_abc', email: 'abc@zenuxs.io' },
+          data: { userId: 'usr_abc', email: 'abc@nebron.io' },
         }),
       };
 
       const event = consumer.parseEvent('1700000000000-0', fields);
       expect(event.type).toBe('auth.user.registered');
-      expect(event.data).toEqual({ userId: 'usr_abc', email: 'abc@zenuxs.io' });
+      expect(event.data).toEqual({ userId: 'usr_abc', email: 'abc@nebron.io' });
     });
 
     it('parses JSON string payload in "payload" field', () => {
       const fields = {
         payload: JSON.stringify({
           type: 'auth.user.registered',
-          data: { userId: 'usr_xyz', email: 'xyz@zenuxs.io' },
+          data: { userId: 'usr_xyz', email: 'xyz@nebron.io' },
         }),
       };
 
       const event = consumer.parseEvent('1700000000000-1', fields);
       expect(event.type).toBe('auth.user.registered');
-      expect(event.data).toEqual({ userId: 'usr_xyz', email: 'xyz@zenuxs.io' });
+      expect(event.data).toEqual({ userId: 'usr_xyz', email: 'xyz@nebron.io' });
     });
 
     it('parses flat fields with type, userId, email', () => {
       const fields = {
         type: 'auth.user.registered',
         userId: 'usr_flat',
-        email: 'flat@zenuxs.io',
+        email: 'flat@nebron.io',
       };
 
       const event = consumer.parseEvent('1700000000000-2', fields);
       expect(event.type).toBe('auth.user.registered');
       expect(event.data.userId).toBe('usr_flat');
-      expect(event.data.email).toBe('flat@zenuxs.io');
+      expect(event.data.email).toBe('flat@nebron.io');
     });
 
     it('parses type with nested JSON data string', () => {
       const fields = {
         type: 'auth.user.registered',
-        data: JSON.stringify({ userId: 'usr_nested', email: 'nested@zenuxs.io' }),
+        data: JSON.stringify({ userId: 'usr_nested', email: 'nested@nebron.io' }),
       };
 
       const event = consumer.parseEvent('1700000000000-3', fields);
       expect(event.type).toBe('auth.user.registered');
-      expect(event.data).toEqual({ userId: 'usr_nested', email: 'nested@zenuxs.io' });
+      expect(event.data).toEqual({ userId: 'usr_nested', email: 'nested@nebron.io' });
     });
   });
 
@@ -83,10 +83,10 @@ describe('Event Consumer Layer', () => {
 
       await handleEvent({
         type: 'auth.user.registered',
-        data: { userId: 'usr_test', email: 'test@zenuxs.io' },
+        data: { userId: 'usr_test', email: 'test@nebron.io' },
       });
 
-      expect(createSpy).toHaveBeenCalledWith('usr_test', 'test@zenuxs.io');
+      expect(createSpy).toHaveBeenCalledWith('usr_test', 'test@nebron.io');
     });
 
     it('is idempotent: duplicate auth.user.registered does not error and returns existing profile', async () => {
@@ -109,12 +109,12 @@ describe('Event Consumer Layer', () => {
       // Call twice with same userId
       await handleEvent({
         type: 'auth.user.registered',
-        data: { userId: 'usr_dup', email: 'dup@zenuxs.io' },
+        data: { userId: 'usr_dup', email: 'dup@nebron.io' },
       });
 
       await handleEvent({
         type: 'auth.user.registered',
-        data: { userId: 'usr_dup', email: 'dup@zenuxs.io' },
+        data: { userId: 'usr_dup', email: 'dup@nebron.io' },
       });
 
       expect(createSpy).toHaveBeenCalledTimes(2);
@@ -167,12 +167,12 @@ describe('Event Consumer Layer', () => {
       await (consumer as any).processMessage(messageId, rawFields);
 
       expect(mockRedis.xadd).toHaveBeenCalledWith(
-        'zenuxs.events.dlq',
+        'nebron.events.dlq',
         '*',
         'originalId',
         messageId,
         'originalStream',
-        'zenuxs.events',
+        'nebron.events',
         'eventType',
         'auth.user.registered',
         'error',
@@ -183,7 +183,7 @@ describe('Event Consumer Layer', () => {
         expect.any(String)
       );
 
-      expect(mockRedis.xack).toHaveBeenCalledWith('zenuxs.events', 'core-api', messageId);
+      expect(mockRedis.xack).toHaveBeenCalledWith('nebron.events', 'core-api', messageId);
     });
   });
 });

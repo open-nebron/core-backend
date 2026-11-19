@@ -2,7 +2,7 @@ import os from 'node:os';
 import { Redis } from 'ioredis';
 import { env } from '../../config/env.js';
 import { handleEvent } from './handlers.js';
-import type { ZenuxsEvent } from './types.js';
+import type { NebronEvent } from './types.js';
 
 export interface EventConsumer {
   start(): Promise<void>;
@@ -71,11 +71,7 @@ export class RedisStreamEventConsumer implements EventConsumer {
   }
 
   private getStreams(): string[] {
-    const list = [this.streamName];
-    if (this.streamName !== 'zenuxs.events') {
-      list.push('zenuxs.events');
-    }
-    return list;
+    return [this.streamName];
   }
 
   private async initConsumerGroup(): Promise<void> {
@@ -143,7 +139,7 @@ export class RedisStreamEventConsumer implements EventConsumer {
     return fields;
   }
 
-  public parseEvent(messageId: string, fields: Record<string, string>): ZenuxsEvent {
+  public parseEvent(messageId: string, fields: Record<string, string>): NebronEvent {
     // Format A: JSON string in 'event' or 'payload' or 'data' field
     const rawPayload = fields.event || fields.payload;
     if (rawPayload) {
@@ -256,7 +252,7 @@ export class RedisStreamEventConsumer implements EventConsumer {
   private async routeToDlq(
     originalStream: string,
     originalId: string,
-    event: ZenuxsEvent,
+    event: NebronEvent,
     rawFields: Record<string, string>,
     errorMessage: string
   ): Promise<void> {

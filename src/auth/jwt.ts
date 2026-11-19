@@ -13,7 +13,7 @@ export async function verifyAccessToken(
   token: string,
   options: VerifyJwtOptions = {}
 ): Promise<AuthUser> {
-  const issuer = options.issuer ?? 'zenuxs-auth';
+  const issuer = options.issuer ?? 'nebron-auth';
   const audience = options.audience ?? 'core';
   const algorithms = options.algorithms ?? ['RS256'];
 

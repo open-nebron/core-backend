@@ -7,10 +7,10 @@ Production-grade core backend microservice for the Nebron polyrepo platform.
 - **Database Ownership**: Owns and manages the `nebron_core` MongoDB database. Never reads or writes to sibling databases.
 - **Stateless JWT Verification**: Never issues tokens. Verifies RS256 Bearer access tokens against `auth-service`'s JWKS endpoint (`AUTH_JWKS_URL`).
 - **In-Memory JWKS Cache**: Caches public keys in memory for 10 minutes with background refresh. Fastify pre-handler verifies tokens locally without synchronous calls to `auth-service`.
-- **Event-Driven Profile Creation**: Consumes Redis Stream `zenuxs.events` (consumer group `core-api`) to handle `auth.user.registered` events and automatically create profile documents with auto-generated unique usernames.
+- **Event-Driven Profile Creation**: Consumes Redis Stream `nebron.events` (consumer group `core-api`) to handle `auth.user.registered` events and automatically create profile documents with auto-generated unique usernames.
 - **Profile Media Storage (Cloudflare R2 / MinIO)**: Direct-to-storage presigned POST upload flow for avatars (max 5 MB) and banners (max 10 MB). Server never proxies image bytes. URLs are dynamically computed from `*Key` at read time (`avatarUrl`, `bannerUrl`).
 - **User Preferences**: Validated multi-language localization (BCP-47), user theme (`light`, `dark`, `system`), about-me, and bio.
-- **Idempotency & Resiliency**: Retries failed events with exponential backoff and routes poison messages to `zenuxs.events.dlq`. Background and on-demand orphan file cleanup.
+- **Idempotency & Resiliency**: Retries failed events with exponential backoff and routes poison messages to `nebron.events.dlq`. Background and on-demand orphan file cleanup.
 
 ---
 
@@ -129,13 +129,13 @@ Output:
 Publish an `auth.user.registered` event to the Redis Stream:
 
 ```bash
-node scripts/emit-event.js usr_john_01 john.doe@zenuxs.io
+node scripts/emit-event.js usr_john_01 john.doe@nebron.io
 ```
 
 Verify profile creation in MongoDB:
 
 ```bash
-docker exec -it zenuxs-core-mongo mongosh nebron_core --eval 'db.profiles.findOne({ userId: "usr_john_01" })'
+docker exec -it nebron-core-mongo mongosh nebron_core --eval 'db.profiles.findOne({ userId: "usr_john_01" })'
 ```
 
 ---
@@ -145,7 +145,7 @@ docker exec -it zenuxs-core-mongo mongosh nebron_core --eval 'db.profiles.findOn
 Generate a test access token from the auth mock:
 
 ```bash
-TOKEN=$(curl -s "http://localhost:4001/token?userId=usr_john_01&email=john.doe@zenuxs.io" | jq -r .accessToken)
+TOKEN=$(curl -s "http://localhost:4001/token?userId=usr_john_01&email=john.doe@nebron.io" | jq -r .accessToken)
 ```
 
 **Get Current Profile (`GET /me`):**
@@ -161,7 +161,7 @@ curl -s -X PATCH -H "Authorization: Bearer $TOKEN" \
     "name": "John Doe",
     "dateOfBirth": "1998-04-12",
     "about": "Distributed systems engineer passionate about decentralized platforms.",
-    "bio": "Building Zenuxs Core",
+    "bio": "Building Nebron Core",
     "language": "hi",
     "theme": "dark"
   }' \
@@ -352,7 +352,7 @@ npm run dev
 | `MONGO_URL` | `mongodb://mongo:27017/nebron_core` | MongoDB connection URL |
 | `REDIS_URL` | `redis://redis:6379` | Redis connection URL |
 | `AUTH_JWKS_URL` | `http://auth:4001/.well-known/jwks.json` | JWKS endpoint of auth-service |
-| `EVENTS_STREAM` | `zenuxs.events` | Redis stream for platform events |
+| `EVENTS_STREAM` | `nebron.events` | Redis stream for platform events |
 | `EVENTS_GROUP` | `core-api` | Consumer group name |
 | `ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:8081` | CORS permitted origins |
 | `NODE_ENV` | `development` | Environment mode (`development`, `production`, `test`) |
@@ -361,10 +361,27 @@ npm run dev
 | `R2_ENDPOINT` | `http://localhost:9000` | S3-compatible API endpoint |
 | `R2_ACCESS_KEY_ID` | `minioadmin` | Storage Access Key |
 | `R2_SECRET_ACCESS_KEY` | `minioadmin` | Storage Secret Key |
-| `R2_BUCKET` | `zenuxs-media` | Target bucket name |
-| `R2_PUBLIC_BASE_URL` | `https://media.zenuxs.com` | Public CDN base URL |
+| `R2_BUCKET` | `nebron-media` | Target bucket name |
+| `R2_PUBLIC_BASE_URL` | `https://media.nebron.com` | Public CDN base URL |
 | `MAX_AVATAR_BYTES` | `5242880` | Avatar size cap (5 MB) |
 | `MAX_BANNER_BYTES` | `10485760` | Banner size cap (10 MB) |
 | `SUPPORTED_LANGUAGES` | `en,hi,ta,te,ml,kn,bn,mr,gu,pa,ur` | Comma-separated BCP-47 supported language codes |
 | `DEFAULT_LANGUAGE` | `en` | Default profile language |
 | `INTERNAL_TOKEN` | `dev-internal-token` | Secret token for `/internal/cleanup-orphans` |
+
+---
+
+## Development notes
+
+### Vendored shared-contracts
+core-backend consumes @nebron/contracts via a tarball in vendor/
+for reproducible Docker builds. To update the contracts:
+
+  cd ../shared-contracts && npm pack --pack-destination ../core-backend/vendor
+
+Then bump the version in core-backend/package.json to match the new
+tarball, run npm install, and rebuild. The tarball is committed to
+git intentionally — it makes Docker builds hermetic.
+
+Future: migrate to GitHub Packages or a private npm registry once
+the org has one.

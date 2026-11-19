@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for Zenuxs core-api microservice
+# Multi-stage Dockerfile for Nebron core-api microservice
 
 # Stage 1: Build TypeScript source
 FROM node:20-alpine AS builder

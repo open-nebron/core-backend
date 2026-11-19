@@ -11,7 +11,7 @@ describe('JWT Verification Layer', () => {
     jwksService.setLocalJwks(jwks);
   });
 
-  it('successfully verifies a valid RS256 token with iss=zenuxs-auth and aud including core', async () => {
+  it('successfully verifies a valid RS256 token with iss=nebron-auth and aud including core', async () => {
     const token = await createMockAccessToken({
       sub: 'usr_neo',
       email: 'neo@matrix.org',
@@ -56,7 +56,7 @@ describe('JWT Verification Layer', () => {
     });
   });
 
-  it('rejects tokens with invalid issuer (iss !== zenuxs-auth)', async () => {
+  it('rejects tokens with invalid issuer (iss !== nebron-auth)', async () => {
     const token = await createMockAccessToken({
       iss: 'rogue-issuer',
     });

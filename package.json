@@ -1,7 +1,7 @@
 {
   "name": "core-api",
   "version": "1.0.0",
-  "description": "Production-grade core backend microservice for Zenuxs",
+  "description": "Production-grade core backend microservice for Nebron",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
@@ -19,7 +19,7 @@
     "@fastify/helmet": "^13.2.0",
     "@fastify/swagger": "^9.9.5",
     "@fastify/swagger-ui": "^6.1.4",
-    "@zenuxs/contracts": "file:vendor/zenuxs-contracts-0.1.0.tgz",
+    "@nebron/contracts": "file:vendor/nebron-contracts-0.1.0.tgz",
     "bad-words": "^4.1.5",
     "dotenv": "^18.0.10",
     "fastify": "^5.12.8",

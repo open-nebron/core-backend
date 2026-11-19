@@ -61,9 +61,9 @@ export async function createMockAccessToken(
   const signingKey = keyOverride || keys.privateKey;
 
   const userId = payloadOverrides.sub ?? payloadOverrides.userId ?? 'usr_1234567890';
-  const email = payloadOverrides.email ?? 'neo@zenuxs.io';
+  const email = payloadOverrides.email ?? 'neo@nebron.io';
   const sessionId = payloadOverrides.sessionId ?? 'sess_abc123';
-  const issuer = payloadOverrides.iss !== undefined ? payloadOverrides.iss : 'zenuxs-auth';
+  const issuer = payloadOverrides.iss !== undefined ? payloadOverrides.iss : 'nebron-auth';
   const audience = payloadOverrides.aud !== undefined ? payloadOverrides.aud : ['core', 'auth'];
   const exp = payloadOverrides.exp !== undefined ? payloadOverrides.exp : '1h';
 

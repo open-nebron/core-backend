@@ -5,7 +5,7 @@ import type {
   CoreRelationshipUnblocked,
   CoreRelationshipMuted,
   CoreRelationshipUnmuted,
-} from '@zenuxs/contracts';
+} from '@nebron/contracts';
 
 export class RedisStreamsEventPublisher {
   private redis: Redis;

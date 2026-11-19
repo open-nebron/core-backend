@@ -1,7 +1,7 @@
 import { profileService } from '../profiles/profile.service.js';
-import type { UserRegisteredPayload, ZenuxsEvent } from './types.js';
+import type { UserRegisteredPayload, NebronEvent } from './types.js';
 
-export async function handleEvent(event: ZenuxsEvent): Promise<void> {
+export async function handleEvent(event: NebronEvent): Promise<void> {
   switch (event.type) {
     case 'auth.user.registered': {
       const data = event.data as UserRegisteredPayload;
