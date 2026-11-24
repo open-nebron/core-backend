@@ -17,7 +17,7 @@ export class JwksService {
   private lastFetchedAt: Date | null = null;
   private refreshTimer: NodeJS.Timeout | null = null;
   private lastError: string | null = null;
-  private isFetching = false;
+  private inFlightFetch: Promise<void> | null = null;
   private refreshIntervalMs = 10 * 60 * 1000; // 10 minutes
 
   constructor(jwksUrl: string = env.AUTH_JWKS_URL) {
@@ -30,8 +30,18 @@ export class JwksService {
   }
 
   public async fetchJwks(): Promise<void> {
-    if (this.isFetching) return;
-    this.isFetching = true;
+    if (this.inFlightFetch) {
+      return this.inFlightFetch;
+    }
+    this.inFlightFetch = this._doFetchJwks();
+    try {
+      await this.inFlightFetch;
+    } finally {
+      this.inFlightFetch = null;
+    }
+  }
+
+  private async _doFetchJwks(): Promise<void> {
     try {
       const response = await fetch(this.jwksUrl, {
         headers: { Accept: 'application/json' },
@@ -54,8 +64,6 @@ export class JwksService {
       this.lastError = err.message || 'Unknown error fetching JWKS';
       // In production/boot, do not crash the app if auth-service is momentarily starting up
       console.warn(`[JWKS] Warning: unable to fetch JWKS from ${this.jwksUrl}: ${this.lastError}`);
-    } finally {
-      this.isFetching = false;
     }
   }
 

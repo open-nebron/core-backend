@@ -25,7 +25,12 @@ export async function verifyAccessToken(
   try {
     keySet = jwksService.getKeySet();
   } catch (err: any) {
-    throw new UnauthorizedError('Authentication service keys currently unavailable');
+    await jwksService.fetchJwks();
+    try {
+      keySet = jwksService.getKeySet();
+    } catch (innerErr: any) {
+      throw new UnauthorizedError('Authentication service keys currently unavailable');
+    }
   }
 
   try {
@@ -52,7 +57,48 @@ export async function verifyAccessToken(
     if (error instanceof UnauthorizedError) {
       throw error;
     }
-    // Handle jose errors (JWTExpired, JWSSignatureVerificationFailed, JWTClaimValidationFailed, etc.)
+
+    // If verification failed due to signature verification or missing key,
+    // the signing key might have rotated in auth-service. Force a JWKS refresh and retry once.
+    if (
+      error?.code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED' ||
+      error?.code === 'ERR_JWKS_NO_MATCHING_KEY' ||
+      error?.name === 'JWSSignatureVerificationFailed' ||
+      error?.name === 'JWKSNoMatchingKey' ||
+      /signature/i.test(error?.message || '') ||
+      /matching key/i.test(error?.message || '')
+    ) {
+      try {
+        await jwksService.fetchJwks();
+        const freshKeySet = jwksService.getKeySet();
+        const { payload } = await jwtVerify(token, freshKeySet, {
+          issuer,
+          audience,
+          algorithms,
+        });
+
+        const userId = (payload.sub || (payload as any).userId) as string | undefined;
+        if (!userId) {
+          throw new UnauthorizedError('Token is missing user identifier (sub)');
+        }
+
+        const email = (payload as any).email as string | undefined;
+        const sessionId = ((payload as any).sessionId || (payload as any).sid) as string | undefined;
+
+        return {
+          userId,
+          email: email || '',
+          sessionId,
+        };
+      } catch (retryError: any) {
+        if (retryError instanceof UnauthorizedError) {
+          throw retryError;
+        }
+        throw new UnauthorizedError(retryError.message || 'Invalid token');
+      }
+    }
+
+    // Handle jose errors (JWTExpired, JWTClaimValidationFailed, etc.)
     throw new UnauthorizedError(error.message || 'Invalid token');
   }
 }
