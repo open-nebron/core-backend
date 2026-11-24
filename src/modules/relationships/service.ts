@@ -7,6 +7,16 @@ import {
   defaultRelationshipEventPublisher,
 } from './events.js';
 import type { MuteInput } from './validate.js';
+import { getProfilesCollection } from '../../db/mongo.js';
+import { computePublicUrl } from '../../lib/r2.js';
+
+export interface BlockedUserItem {
+  userId: string;
+  blockedAt: string;
+  username: string;
+  name: string | null;
+  avatarUrl: string | null;
+}
 
 export interface MuteState {
   calls: boolean;
@@ -98,6 +108,32 @@ export class RelationshipService {
       fromUserId,
       toUserId,
       at: new Date().toISOString(),
+    });
+  }
+
+  async getBlockedList(fromUserId: string): Promise<BlockedUserItem[]> {
+    const blockedDocs = await this.repo.getBlockedUsers(fromUserId);
+    if (blockedDocs.length === 0) {
+      return [];
+    }
+
+    const toUserIds = blockedDocs.map((doc) => doc.toUserId);
+    const profilesCol = getProfilesCollection();
+    const profiles = await profilesCol
+      .find({ userId: { $in: toUserIds } })
+      .toArray();
+
+    const profileMap = new Map(profiles.map((p) => [p.userId, p]));
+
+    return blockedDocs.map((rel) => {
+      const prof = profileMap.get(rel.toUserId);
+      return {
+        userId: rel.toUserId,
+        blockedAt: rel.updatedAt ? rel.updatedAt.toISOString() : new Date().toISOString(),
+        username: prof?.username || 'unknown',
+        name: prof?.name || null,
+        avatarUrl: prof ? computePublicUrl(prof.avatarKey, prof.updatedAt) : null,
+      };
     });
   }
 

@@ -107,6 +107,13 @@ export const getRelationshipRateLimiter = createRedisRateLimiter({
   keyGenerator: userKeyGen,
 });
 
+export const getBlockedRateLimiter = createRedisRateLimiter({
+  limit: 60,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:rel_blocked',
+  keyGenerator: userKeyGen,
+});
+
 export const checkRelationshipsRateLimiter = createRedisRateLimiter({
   limit: 600,
   windowSeconds: 60,

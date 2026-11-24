@@ -4,6 +4,7 @@ import {
   blockRateLimiter,
   muteRateLimiter,
   getRelationshipRateLimiter,
+  getBlockedRateLimiter,
   checkRelationshipsRateLimiter,
 } from '../../plugins/rate-limit.js';
 import { env } from '../../config/env.js';
@@ -256,7 +257,46 @@ export const relationshipRoutes: FastifyPluginAsync = async (app: FastifyInstanc
     }
   );
 
-  // 6. GET /relationships/:userId
+  // 6. GET /relationships/blocked
+  app.get(
+    '/relationships/blocked',
+    {
+      preHandler: [authenticateRequest, getBlockedRateLimiter],
+      schema: {
+        description: 'Get list of users blocked by current user.',
+        tags: ['Relationships'],
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              blocked: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    userId: { type: 'string' },
+                    blockedAt: { type: 'string' },
+                    username: { type: 'string' },
+                    name: { type: ['string', 'null'] },
+                    avatarUrl: { type: ['string', 'null'] },
+                  },
+                  required: ['userId', 'blockedAt', 'username', 'name', 'avatarUrl'],
+                },
+              },
+            },
+            required: ['blocked'],
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const callerUserId = request.user.userId;
+      const blocked = await service.getBlockedList(callerUserId);
+      return reply.status(200).send({ blocked });
+    }
+  );
+
+  // 7. GET /relationships/:userId
   app.get(
     '/relationships/:userId',
     {

@@ -236,4 +236,72 @@ describe('Relationships - Block / Unblock Module', () => {
     const body = res.json();
     expect(body.error.code).toBe('invalid_uuid');
   });
+
+  it('GET /relationships/blocked returns list of blocked users with enriched profiles', async () => {
+    // Seed profile for userB
+    const profilesCol = db.collection('profiles');
+    await profilesCol.insertOne({
+      userId: userB,
+      username: 'blocked_user_b',
+      name: 'Blocked User B',
+      dateOfBirth: null,
+      about: null,
+      bio: null,
+      language: 'en',
+      theme: 'system',
+      avatarKey: null,
+      bannerKey: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // Block userB
+    await app.inject({
+      method: 'POST',
+      url: `/relationships/${userB}/block`,
+      headers: {
+        authorization: `Bearer ${tokenUserA}`,
+      },
+    });
+
+    // Call GET /relationships/blocked
+    const res = await app.inject({
+      method: 'GET',
+      url: '/relationships/blocked',
+      headers: {
+        authorization: `Bearer ${tokenUserA}`,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.blocked).toBeInstanceOf(Array);
+    expect(body.blocked.length).toBe(1);
+    expect(body.blocked[0].userId).toBe(userB);
+    expect(body.blocked[0].username).toBe('blocked_user_b');
+    expect(body.blocked[0].name).toBe('Blocked User B');
+    expect(body.blocked[0].avatarUrl).toBeNull();
+    expect(body.blocked[0].blockedAt).toBeDefined();
+
+    // Unblock userB
+    await app.inject({
+      method: 'DELETE',
+      url: `/relationships/${userB}/block`,
+      headers: {
+        authorization: `Bearer ${tokenUserA}`,
+      },
+    });
+
+    // Call GET /relationships/blocked again
+    const resAfter = await app.inject({
+      method: 'GET',
+      url: '/relationships/blocked',
+      headers: {
+        authorization: `Bearer ${tokenUserA}`,
+      },
+    });
+
+    expect(resAfter.statusCode).toBe(200);
+    expect(resAfter.json().blocked).toEqual([]);
+  });
 });

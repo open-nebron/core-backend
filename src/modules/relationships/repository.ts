@@ -119,6 +119,16 @@ export class RelationshipRepository {
       { upsert: true }
     );
   }
+
+  async getBlockedUsers(fromUserId: string): Promise<RelationshipDocument[]> {
+    return this.getCollection()
+      .find({
+        fromUserId,
+        blocked: true,
+      })
+      .sort({ updatedAt: -1 })
+      .toArray();
+  }
 }
 
 export const defaultRelationshipRepository = new RelationshipRepository();
