@@ -1,4 +1,12 @@
-import { getProfilesCollection, type ProfileDocument, type UserTheme, type MessageRequestPolicy } from '../../db/mongo.js';
+import {
+  getProfilesCollection,
+  type ProfileDocument,
+  type UserTheme,
+  type MessageRequestPolicy,
+  type UserPrivacy,
+  DEFAULT_PRIVACY,
+} from '../../db/mongo.js';
+import { getRedisClient } from '../../db/redis.js';
 import { validateUsername } from './username.rules.js';
 import { generateUniqueUsername } from './username.generator.js';
 import { BadRequestError, ConflictError, NotFoundError } from '../../utils/errors.js';
@@ -224,6 +232,58 @@ export class ProfileService {
       }
       throw err;
     }
+  }
+
+  async getPrivacy(userId: string): Promise<UserPrivacy> {
+    const profile = await this.getProfileByUserId(userId);
+    if (!profile) {
+      throw new NotFoundError('Profile not found', 'profile_not_found');
+    }
+    return profile.privacy || DEFAULT_PRIVACY;
+  }
+
+  async updatePrivacy(userId: string, privacyPatch: Partial<UserPrivacy>): Promise<UserPrivacy> {
+    const collection = getProfilesCollection();
+    const existing = await this.getProfileByUserId(userId);
+    if (!existing) {
+      throw new NotFoundError('Profile not found', 'profile_not_found');
+    }
+
+    const currentPrivacy = existing.privacy || DEFAULT_PRIVACY;
+    const updatedPrivacy: UserPrivacy = {
+      showOnlineStatus:
+        privacyPatch.showOnlineStatus !== undefined
+          ? privacyPatch.showOnlineStatus
+          : currentPrivacy.showOnlineStatus,
+      showLastSeen:
+        privacyPatch.showLastSeen !== undefined
+          ? privacyPatch.showLastSeen
+          : currentPrivacy.showLastSeen,
+      sendReadReceipts:
+        privacyPatch.sendReadReceipts !== undefined
+          ? privacyPatch.sendReadReceipts
+          : currentPrivacy.sendReadReceipts,
+    };
+
+    await collection.updateOne(
+      { userId },
+      {
+        $set: {
+          privacy: updatedPrivacy,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    // Invalidate Redis cache
+    try {
+      const redis = getRedisClient();
+      await redis.del(`user:privacy:${userId}`);
+    } catch {
+      // Best-effort cache invalidation
+    }
+
+    return updatedPrivacy;
   }
 }
 

@@ -139,3 +139,22 @@ export const confirmUploadSchema = z.object({
 });
 
 export type ConfirmUploadInput = z.infer<typeof confirmUploadSchema>;
+
+export const patchPrivacySchema = z
+  .object({
+    showOnlineStatus: z.enum(['everyone', 'contacts', 'nobody']).optional(),
+    showLastSeen: z.enum(['everyone', 'contacts', 'nobody']).optional(),
+    sendReadReceipts: z.boolean().optional(),
+  })
+  .strict()
+  .refine(
+    (data) =>
+      data.showOnlineStatus !== undefined ||
+      data.showLastSeen !== undefined ||
+      data.sendReadReceipts !== undefined,
+    {
+      message: 'At least one privacy setting must be provided',
+    }
+  );
+
+export type PatchPrivacyInput = z.infer<typeof patchPrivacySchema>;

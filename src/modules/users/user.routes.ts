@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { authenticateRequest } from '../../auth/hook.js';
 import { userSearchRateLimiter, userGetRateLimiter } from '../../plugins/rate-limit.js';
-import { getProfilesCollection, type ProfileDocument } from '../../db/mongo.js';
+import { getProfilesCollection, type ProfileDocument, DEFAULT_PRIVACY } from '../../db/mongo.js';
 import { NotFoundError } from '../../utils/errors.js';
 import { computePublicUrl } from '../../lib/r2.js';
 import { env } from '../../config/env.js';
@@ -192,6 +192,16 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
               bio: { type: 'string', nullable: true },
               about: { type: 'string', nullable: true },
               messageRequestPolicy: { type: 'string', enum: ['everyone', 'known', 'nobody'] },
+              online: { type: 'boolean' },
+              lastSeenAt: { type: 'string', nullable: true },
+              privacy: {
+                type: 'object',
+                properties: {
+                  showOnlineStatus: { type: 'string', enum: ['everyone', 'contacts', 'nobody'] },
+                  showLastSeen: { type: 'string', enum: ['everyone', 'contacts', 'nobody'] },
+                  sendReadReceipts: { type: 'boolean' },
+                },
+              },
               createdAt: { type: 'string' },
             },
             required: ['userId', 'username', 'createdAt'],
@@ -208,7 +218,36 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         throw new NotFoundError(`User with ID '${userId}' not found`);
       }
 
-      return reply.status(200).send({
+      const isSelf = Boolean(request.user?.userId && request.user.userId === doc.userId);
+      const isInternal = Boolean(
+        request.headers['x-internal-token'] && request.headers['x-internal-token'] === env.INTERNAL_TOKEN
+      );
+
+      const privacy = doc.privacy || DEFAULT_PRIVACY;
+
+      // Privacy checks for online status:
+      // if viewer sees showOnlineStatus = 'nobody' -> don't include online
+      // (contacts rule deferred — needs follow system; treat 'contacts' as 'everyone' for now)
+      // TODO: When follow/contacts system is implemented, check if viewer is in user's contacts for 'contacts' rule
+      let includeOnline = isSelf || isInternal;
+      if (!includeOnline) {
+        if (privacy.showOnlineStatus === 'everyone' || privacy.showOnlineStatus === 'contacts') {
+          includeOnline = true;
+        }
+      }
+
+      // Privacy checks for last seen:
+      // if viewer sees showLastSeen = 'nobody' -> don't include lastSeenAt
+      // (contacts rule deferred — needs follow system; treat 'contacts' as 'everyone' for now)
+      // TODO: When follow/contacts system is implemented, check if viewer is in user's contacts for 'contacts' rule
+      let includeLastSeen = isSelf || isInternal;
+      if (!includeLastSeen) {
+        if (privacy.showLastSeen === 'everyone' || privacy.showLastSeen === 'contacts') {
+          includeLastSeen = true;
+        }
+      }
+
+      const responseObj: Record<string, unknown> = {
         userId: doc.userId,
         username: doc.username,
         name: doc.name ?? null,
@@ -218,7 +257,26 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         about: doc.about ?? null,
         messageRequestPolicy: doc.messageRequestPolicy || 'known',
         createdAt: doc.createdAt instanceof Date ? doc.createdAt.toISOString() : new Date(doc.createdAt).toISOString(),
-      });
+      };
+
+      if (isSelf || isInternal) {
+        responseObj.privacy = privacy;
+      }
+
+      if (includeOnline && doc.online !== undefined) {
+        responseObj.online = doc.online;
+      }
+
+      if (includeLastSeen && doc.lastSeenAt !== undefined) {
+        responseObj.lastSeenAt =
+          doc.lastSeenAt === null
+            ? null
+            : doc.lastSeenAt instanceof Date
+            ? doc.lastSeenAt.toISOString()
+            : new Date(doc.lastSeenAt).toISOString();
+      }
+
+      return reply.status(200).send(responseObj);
     }
   );
 };

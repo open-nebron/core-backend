@@ -13,11 +13,13 @@ import {
   patchMeSchema,
   patchUsernameSchema,
   uploadUrlSchema,
+  patchPrivacySchema,
   type CheckUsernameQuery,
   type ConfirmUploadInput,
   type PatchMeInput,
   type PatchUsernameInput,
   type UploadUrlInput,
+  type PatchPrivacyInput,
 } from './profile.schema.js';
 import { formatProfileResponse, profileService } from './profile.service.js';
 import { validateUsername } from './username.rules.js';
@@ -182,6 +184,72 @@ export const profileRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
 
       const updated = await profileService.updateProfile(userId, parsedBody);
       return reply.status(200).send(formatProfileResponse(updated));
+    }
+  );
+
+  // GET /me/privacy - Get current user privacy settings
+  app.get(
+    '/me/privacy',
+    {
+      preHandler: [authenticateRequest],
+      schema: {
+        description: 'Get current user privacy settings',
+        tags: ['Profile'],
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              showOnlineStatus: { type: 'string', enum: ['everyone', 'contacts', 'nobody'] },
+              showLastSeen: { type: 'string', enum: ['everyone', 'contacts', 'nobody'] },
+              sendReadReceipts: { type: 'boolean' },
+            },
+            required: ['showOnlineStatus', 'showLastSeen', 'sendReadReceipts'],
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { userId } = request.user;
+      const privacy = await profileService.getPrivacy(userId);
+      return reply.status(200).send(privacy);
+    }
+  );
+
+  // PATCH /me/privacy - Update current user privacy settings
+  app.patch<{ Body: PatchPrivacyInput }>(
+    '/me/privacy',
+    {
+      preHandler: [authenticateRequest, patchMeRateLimiter],
+      schema: {
+        description: 'Update current user privacy settings',
+        tags: ['Profile'],
+        body: {
+          type: 'object',
+          properties: {
+            showOnlineStatus: { type: 'string', enum: ['everyone', 'contacts', 'nobody'] },
+            showLastSeen: { type: 'string', enum: ['everyone', 'contacts', 'nobody'] },
+            sendReadReceipts: { type: 'boolean' },
+          },
+          additionalProperties: false,
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              showOnlineStatus: { type: 'string', enum: ['everyone', 'contacts', 'nobody'] },
+              showLastSeen: { type: 'string', enum: ['everyone', 'contacts', 'nobody'] },
+              sendReadReceipts: { type: 'boolean' },
+            },
+            required: ['showOnlineStatus', 'showLastSeen', 'sendReadReceipts'],
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const parsedBody = patchPrivacySchema.parse(request.body);
+      const { userId } = request.user;
+      const updated = await profileService.updatePrivacy(userId, parsedBody);
+      return reply.status(200).send(updated);
     }
   );
 

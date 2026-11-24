@@ -3,6 +3,19 @@ import { env } from '../config/env.js';
 
 export type UserTheme = 'light' | 'dark' | 'system';
 export type MessageRequestPolicy = 'everyone' | 'known' | 'nobody';
+export type PrivacyVisibility = 'everyone' | 'contacts' | 'nobody';
+
+export interface UserPrivacy {
+  showOnlineStatus: PrivacyVisibility;
+  showLastSeen: PrivacyVisibility;
+  sendReadReceipts: boolean;
+}
+
+export const DEFAULT_PRIVACY: UserPrivacy = {
+  showOnlineStatus: 'everyone',
+  showLastSeen: 'contacts',
+  sendReadReceipts: true,
+};
 
 export interface ProfileDocument {
   _id?: any;
@@ -15,6 +28,9 @@ export interface ProfileDocument {
   language: string;
   theme: UserTheme;
   messageRequestPolicy?: MessageRequestPolicy;
+  privacy?: UserPrivacy;
+  online?: boolean;
+  lastSeenAt?: Date | string | null;
   avatarKey: string | null;
   bannerKey: string | null;
   createdAt: Date;
