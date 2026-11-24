@@ -95,6 +95,7 @@ export const patchMeSchema = z
       .transform((val) => val.trim().toLowerCase())
       .optional(),
     theme: z.enum(['light', 'dark', 'system']).optional(),
+    messageRequestPolicy: z.enum(['everyone', 'known', 'nobody']).optional(),
   })
   .strict()
   .refine(
@@ -104,9 +105,11 @@ export const patchMeSchema = z
       data.about !== undefined ||
       data.bio !== undefined ||
       data.language !== undefined ||
-      data.theme !== undefined,
+      data.theme !== undefined ||
+      data.messageRequestPolicy !== undefined,
     {
-      message: 'At least one field (name, dateOfBirth, about, bio, language, theme) must be provided',
+      message:
+        'At least one field (name, dateOfBirth, about, bio, language, theme, messageRequestPolicy) must be provided',
     }
   );
 

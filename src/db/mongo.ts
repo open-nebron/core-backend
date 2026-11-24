@@ -2,6 +2,7 @@ import { MongoClient, Db, Collection } from 'mongodb';
 import { env } from '../config/env.js';
 
 export type UserTheme = 'light' | 'dark' | 'system';
+export type MessageRequestPolicy = 'everyone' | 'known' | 'nobody';
 
 export interface ProfileDocument {
   _id?: any;
@@ -13,6 +14,7 @@ export interface ProfileDocument {
   bio: string | null;
   language: string;
   theme: UserTheme;
+  messageRequestPolicy?: MessageRequestPolicy;
   avatarKey: string | null;
   bannerKey: string | null;
   createdAt: Date;

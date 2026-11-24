@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../src/app.js';
 import { jwksService } from '../../src/auth/jwks.js';
-import { profileService } from '../../src/modules/profiles/profile.service.js';
+import { profileService, formatProfileResponse } from '../../src/modules/profiles/profile.service.js';
 import * as mongoDb from '../../src/db/mongo.js';
 import * as redisDb from '../../src/db/redis.js';
 import { createMockAccessToken, getOrCreateTestAuthKeys } from '../mocks/jwt.mock.js';
@@ -160,6 +160,7 @@ describe('Profile and Health API Routes', () => {
         bio: 'There is no spoon.',
         language: 'en',
         theme: 'system',
+        messageRequestPolicy: 'known',
         avatarUrl: null,
         bannerUrl: null,
         createdAt: now.toISOString(),
@@ -238,6 +239,76 @@ describe('Profile and Health API Routes', () => {
       expect(json.name).toBe('Neo');
       expect(json.bio).toBe('I know Kung Fu.');
       expect(json.dateOfBirth).toBe('1995-05-15');
+    });
+
+    it('persists messageRequestPolicy when set to valid value', async () => {
+      const now = new Date('2026-01-01T00:00:00Z');
+      const spy = vi.spyOn(profileService, 'updateProfile').mockResolvedValueOnce({
+        userId: mockUserId,
+        username: 'the_one',
+        name: 'Neo',
+        dateOfBirth: null,
+        about: null,
+        bio: null,
+        language: 'en',
+        theme: 'system',
+        messageRequestPolicy: 'everyone',
+        avatarKey: null,
+        bannerKey: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/me',
+        headers: {
+          authorization: `Bearer ${validToken}`,
+        },
+        payload: {
+          messageRequestPolicy: 'everyone',
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const json = res.json();
+      expect(json.messageRequestPolicy).toBe('everyone');
+      expect(spy).toHaveBeenCalledWith(mockUserId, { messageRequestPolicy: 'everyone' });
+    });
+
+    it('rejects invalid messageRequestPolicy with 400', async () => {
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/me',
+        headers: {
+          authorization: `Bearer ${validToken}`,
+        },
+        payload: {
+          messageRequestPolicy: 'invalid_policy',
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+      const json = res.json();
+      expect(json.error.code).toBe('validation_error');
+    });
+
+    it('defaults messageRequestPolicy to known for profiles without policy', () => {
+      const formatted = formatProfileResponse({
+        userId: 'usr_new',
+        username: 'newbie',
+        name: null,
+        dateOfBirth: null,
+        about: null,
+        bio: null,
+        language: 'en',
+        theme: 'system',
+        avatarKey: null,
+        bannerKey: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      expect(formatted.messageRequestPolicy).toBe('known');
     });
   });
 

@@ -4,6 +4,7 @@ import { userSearchRateLimiter, userGetRateLimiter } from '../../plugins/rate-li
 import { getProfilesCollection, type ProfileDocument } from '../../db/mongo.js';
 import { NotFoundError } from '../../utils/errors.js';
 import { computePublicUrl } from '../../lib/r2.js';
+import { env } from '../../config/env.js';
 
 interface SearchUsersQuery {
   q?: string;
@@ -20,6 +21,17 @@ interface ByUserIdParams {
 
 function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function authenticateUserOrInternal(
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> {
+  const incoming = request.headers['x-internal-token'];
+  if (incoming && incoming === env.INTERNAL_TOKEN) {
+    return;
+  }
+  return authenticateRequest(request, reply);
 }
 
 export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
@@ -121,9 +133,12 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
               username: { type: 'string' },
               name: { type: 'string', nullable: true },
               avatarUrl: { type: 'string', nullable: true },
+              bannerUrl: { type: 'string', nullable: true },
               bio: { type: 'string', nullable: true },
+              about: { type: 'string', nullable: true },
+              createdAt: { type: 'string' },
             },
-            required: ['userId', 'username'],
+            required: ['userId', 'username', 'createdAt'],
           },
         },
       },
@@ -142,7 +157,10 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         username: doc.username,
         name: doc.name ?? null,
         avatarUrl: computePublicUrl(doc.avatarKey, doc.updatedAt),
+        bannerUrl: computePublicUrl(doc.bannerKey, doc.updatedAt),
         bio: doc.bio ?? null,
+        about: doc.about ?? null,
+        createdAt: doc.createdAt instanceof Date ? doc.createdAt.toISOString() : new Date(doc.createdAt).toISOString(),
       });
     }
   );
@@ -151,7 +169,7 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.get<{ Params: ByUserIdParams }>(
     '/users/:userId',
     {
-      preHandler: [authenticateRequest, userGetRateLimiter],
+      preHandler: [authenticateUserOrInternal, userGetRateLimiter],
       schema: {
         description: 'Fetch public profile by userId',
         tags: ['Users'],
@@ -173,6 +191,7 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
               bannerUrl: { type: 'string', nullable: true },
               bio: { type: 'string', nullable: true },
               about: { type: 'string', nullable: true },
+              messageRequestPolicy: { type: 'string', enum: ['everyone', 'known', 'nobody'] },
               createdAt: { type: 'string' },
             },
             required: ['userId', 'username', 'createdAt'],
@@ -197,6 +216,7 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         bannerUrl: computePublicUrl(doc.bannerKey, doc.updatedAt),
         bio: doc.bio ?? null,
         about: doc.about ?? null,
+        messageRequestPolicy: doc.messageRequestPolicy || 'known',
         createdAt: doc.createdAt instanceof Date ? doc.createdAt.toISOString() : new Date(doc.createdAt).toISOString(),
       });
     }

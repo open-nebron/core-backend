@@ -1,4 +1,4 @@
-import { getProfilesCollection, type ProfileDocument, type UserTheme } from '../../db/mongo.js';
+import { getProfilesCollection, type ProfileDocument, type UserTheme, type MessageRequestPolicy } from '../../db/mongo.js';
 import { validateUsername } from './username.rules.js';
 import { generateUniqueUsername } from './username.generator.js';
 import { BadRequestError, ConflictError, NotFoundError } from '../../utils/errors.js';
@@ -14,6 +14,7 @@ export interface ProfileResponse {
   bio: string | null;
   language: string;
   theme: UserTheme;
+  messageRequestPolicy: MessageRequestPolicy;
   avatarUrl: string | null;
   bannerUrl: string | null;
   createdAt: string;
@@ -37,6 +38,7 @@ export function formatProfileResponse(doc: ProfileDocument): ProfileResponse {
     bio: doc.bio ?? null,
     language: doc.language || env.DEFAULT_LANGUAGE,
     theme: doc.theme || 'system',
+    messageRequestPolicy: doc.messageRequestPolicy || 'known',
     avatarUrl: computePublicUrl(doc.avatarKey, doc.updatedAt),
     bannerUrl: computePublicUrl(doc.bannerKey, doc.updatedAt),
     createdAt: doc.createdAt.toISOString(),
@@ -73,6 +75,7 @@ export class ProfileService {
       bio?: string;
       language?: string;
       theme?: UserTheme;
+      messageRequestPolicy?: MessageRequestPolicy;
     }
   ): Promise<ProfileDocument> {
     const collection = getProfilesCollection();
@@ -87,6 +90,7 @@ export class ProfileService {
     if (data.bio !== undefined) updateFields.bio = data.bio;
     if (data.language !== undefined) updateFields.language = data.language;
     if (data.theme !== undefined) updateFields.theme = data.theme;
+    if (data.messageRequestPolicy !== undefined) updateFields.messageRequestPolicy = data.messageRequestPolicy;
 
     const result = await collection.findOneAndUpdate(
       { userId },
@@ -202,6 +206,7 @@ export class ProfileService {
       bio: null,
       language: env.DEFAULT_LANGUAGE,
       theme: 'system',
+      messageRequestPolicy: 'known',
       avatarKey: null,
       bannerKey: null,
       createdAt: now,

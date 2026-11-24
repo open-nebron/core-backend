@@ -169,8 +169,21 @@ describe('Users API Routes (/users)', () => {
       expect(json.bio).toBe('Alice bio');
       expect(json.about).toBe('About Alice');
       expect(json.createdAt).toBeDefined();
+      expect(json.messageRequestPolicy).toBe('known');
       expect(json).not.toHaveProperty('email');
       expect(json).not.toHaveProperty('dateOfBirth');
+    });
+
+    it('returns public profile when authenticated via x-internal-token', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/users/usr_target_1',
+        headers: { 'x-internal-token': 'dev-internal-token' },
+      });
+      expect(res.statusCode).toBe(200);
+      const json = res.json();
+      expect(json.userId).toBe('usr_target_1');
+      expect(json.messageRequestPolicy).toBe('known');
     });
 
     it('returns 404 when userId does not exist', async () => {
