@@ -114,3 +114,18 @@ export const checkRelationshipsRateLimiter = createRedisRateLimiter({
   keyGenerator: (req) =>
     (req.headers['x-internal-token'] as string) || req.ip || 'internal',
 });
+
+// User search & public profile rate limiters
+export const userSearchRateLimiter = createRedisRateLimiter({
+  limit: 30,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:user_search',
+  keyGenerator: userKeyGen,
+});
+
+export const userGetRateLimiter = createRedisRateLimiter({
+  limit: 60,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:user_get',
+  keyGenerator: userKeyGen,
+});
