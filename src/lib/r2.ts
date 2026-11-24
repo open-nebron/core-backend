@@ -96,8 +96,15 @@ export async function createPresignedUpload(
 
   const expiresAt = new Date(Date.now() + expiresInSeconds * 1000).toISOString();
 
+  let uploadUrl = presignedPost.url;
+  if (env.R2_CLIENT_ENDPOINT) {
+    uploadUrl = uploadUrl.replace(env.R2_ENDPOINT, env.R2_CLIENT_ENDPOINT);
+  } else if (uploadUrl.includes('://minio:')) {
+    uploadUrl = uploadUrl.replace('://minio:', '://localhost:');
+  }
+
   return {
-    uploadUrl: presignedPost.url,
+    uploadUrl,
     fields: presignedPost.fields,
     objectKey,
     expiresAt,
@@ -162,7 +169,10 @@ export function computePublicUrl(objectKey: string | null | undefined, updatedAt
     return null;
   }
 
-  const baseUrl = env.R2_PUBLIC_BASE_URL.replace(/\/+$/, '');
+  let baseUrl = env.R2_PUBLIC_BASE_URL.replace(/\/+$/, '');
+  if (baseUrl.includes('://minio:')) {
+    baseUrl = baseUrl.replace('://minio:', '://localhost:');
+  }
   const versionParam = updatedAt ? `?v=${updatedAt.getTime()}` : '';
   return `${baseUrl}/${objectKey}${versionParam}`;
 }

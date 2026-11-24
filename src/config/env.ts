@@ -18,6 +18,7 @@ const envSchema = z
     // Cloudflare R2 / S3 Storage
     R2_ACCOUNT_ID: z.string().optional(),
     R2_ENDPOINT: z.string().default('http://localhost:9000'),
+    R2_CLIENT_ENDPOINT: z.string().optional(),
     R2_ACCESS_KEY_ID: z.string().default('minioadmin'),
     R2_SECRET_ACCESS_KEY: z.string().default('minioadmin'),
     R2_BUCKET: z.string().default('nebron-media'),
