@@ -90,6 +90,27 @@ export class PostRepository {
       .limit(limit)
       .toArray();
   }
+
+  async getFeedPosts(
+    authorIds: string[],
+    limit: number,
+    before?: Date
+  ): Promise<PostDocument[]> {
+    if (authorIds.length === 0) return [];
+    const filter: Record<string, unknown> = {
+      authorId: { $in: authorIds },
+      deleted: false,
+    };
+    if (before) {
+      filter.createdAt = { $lt: before };
+    }
+
+    return this.getCollection()
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .toArray();
+  }
 }
 
 export const defaultPostRepository = new PostRepository();

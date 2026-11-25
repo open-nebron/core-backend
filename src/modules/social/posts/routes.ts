@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { authenticateRequest } from '../../../auth/hook.js';
-import { createPostRateLimiter } from '../../../plugins/rate-limit.js';
+import { createPostRateLimiter, feedRateLimiter } from '../../../plugins/rate-limit.js';
 import {
   createPostSchema,
   userIdParamSchema,
@@ -29,6 +29,71 @@ interface PaginationQuery {
 }
 
 export const postRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
+  // 0. GET /feed?limit=20&before=<ISO>
+  app.get<{ Querystring: PaginationQuery }>(
+    '/feed',
+    {
+      preHandler: [authenticateRequest, feedRateLimiter],
+      schema: {
+        description: 'Get personalized feed of followed users',
+        tags: ['Social - Feed'],
+        querystring: {
+          type: 'object',
+          properties: {
+            limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
+            before: { type: 'string', format: 'date-time' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              data: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    body: { type: 'string' },
+                    imageKey: { type: 'string', nullable: true },
+                    imageUrl: { type: 'string', nullable: true },
+                    likeCount: { type: 'integer' },
+                    commentCount: { type: 'integer' },
+                    likedByViewer: { type: 'boolean' },
+                    createdAt: { type: 'string' },
+                    author: {
+                      type: 'object',
+                      properties: {
+                        userId: { type: 'string' },
+                        username: { type: 'string' },
+                        name: { type: 'string', nullable: true },
+                        avatarUrl: { type: 'string', nullable: true },
+                      },
+                      required: ['userId', 'username'],
+                    },
+                  },
+                  required: ['id', 'body', 'likeCount', 'commentCount', 'likedByViewer', 'createdAt', 'author'],
+                },
+              },
+              hasMore: { type: 'boolean' },
+            },
+            required: ['data', 'hasMore'],
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Querystring: PaginationQuery }>, reply: FastifyReply) => {
+      const viewerId = request.user.userId;
+      const parsedQuery = postsQuerySchema.parse(request.query);
+      const res = await defaultPostService.getFeed(
+        viewerId,
+        parsedQuery.limit ?? 20,
+        parsedQuery.before
+      );
+      return reply.status(200).send(res);
+    }
+  );
+
   // 1. POST /posts
   app.post<{ Body: CreatePostBody }>(
     '/posts',

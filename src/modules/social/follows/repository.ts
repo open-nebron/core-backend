@@ -119,6 +119,13 @@ export class FollowRepository {
       .toArray();
   }
 
+  async getAllFollowingIds(followerId: string): Promise<string[]> {
+    const docs = await this.getCollection()
+      .find({ followerId }, { projection: { followingId: 1 } })
+      .toArray();
+    return docs.map((d) => d.followingId);
+  }
+
   async getFollowingIds(followerId: string): Promise<string[]> {
     const docs = await this.getCollection()
       .find({ followerId }, { projection: { followingId: 1 } })

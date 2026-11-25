@@ -1,6 +1,7 @@
 import { ObjectId, type Db, type MongoClient } from 'mongodb';
 import { PostRepository, defaultPostRepository } from './repository.js';
 import { PostLikeRepository, defaultPostLikeRepository } from '../likes/repository.js';
+import { FollowRepository, defaultFollowRepository } from '../follows/repository.js';
 import {
   SocialEventPublisher,
   defaultSocialEventPublisher,
@@ -45,6 +46,7 @@ export interface PostResponse {
 export class PostService {
   private repo: PostRepository;
   private likeRepo: PostLikeRepository;
+  private followRepo: FollowRepository;
   private publisher: SocialEventPublisher;
   private customDb?: Db;
   private customClient?: MongoClient;
@@ -52,12 +54,14 @@ export class PostService {
   constructor(
     repo?: PostRepository,
     likeRepo?: PostLikeRepository,
+    followRepo?: FollowRepository,
     publisher?: SocialEventPublisher,
     customDb?: Db,
     customClient?: MongoClient
   ) {
-    this.repo = repo ?? defaultPostRepository;
-    this.likeRepo = likeRepo ?? defaultPostLikeRepository;
+    this.repo = repo ?? (customDb ? new PostRepository(customDb) : defaultPostRepository);
+    this.likeRepo = likeRepo ?? (customDb ? new PostLikeRepository(customDb) : defaultPostLikeRepository);
+    this.followRepo = followRepo ?? (customDb ? new FollowRepository(customDb) : defaultFollowRepository);
     this.publisher = publisher ?? defaultSocialEventPublisher;
     this.customDb = customDb;
     this.customClient = customClient;
@@ -227,6 +231,67 @@ export class PostService {
       authorId: viewerId,
       at: new Date().toISOString(),
     });
+  }
+
+  async getFeed(
+    viewerId: string,
+    limit: number = 20,
+    before?: string
+  ): Promise<{ data: PostResponse[]; hasMore: boolean }> {
+    const followingIds = await this.followRepo.getAllFollowingIds(viewerId);
+    if (!followingIds || followingIds.length === 0) {
+      return { data: [], hasMore: false };
+    }
+
+    const blockedIds = await getBlockedUserIds(viewerId, followingIds, this.customDb);
+    const allowedIds = followingIds.filter((id) => !blockedIds.has(id));
+    if (allowedIds.length === 0) {
+      return { data: [], hasMore: false };
+    }
+
+    const beforeDate = before ? new Date(before) : undefined;
+    const rawPosts = await this.repo.getFeedPosts(allowedIds, limit + 1, beforeDate);
+    const hasMore = rawPosts.length > limit;
+    const posts = hasMore ? rawPosts.slice(0, limit) : rawPosts;
+
+    if (posts.length === 0) {
+      return { data: [], hasMore: false };
+    }
+
+    const postIds = posts.map((p) => p._id);
+    const likedSet = await this.likeRepo.hasLikedBatch(viewerId, postIds);
+
+    const authorIds = Array.from(new Set(posts.map((p) => p.authorId)));
+    const profiles = await this.getProfilesCol()
+      .find({ userId: { $in: authorIds } })
+      .toArray();
+
+    const profileMap = new Map<string, ProfileDocument>();
+    for (const p of profiles) {
+      profileMap.set(p.userId, p);
+    }
+
+    const data: PostResponse[] = posts.map((p) => {
+      const authorProfile = profileMap.get(p.authorId);
+      return {
+        id: p._id.toString(),
+        body: p.body,
+        imageKey: p.imageKey ?? null,
+        imageUrl: p.imageUrl ?? null,
+        likeCount: p.likeCount ?? 0,
+        commentCount: p.commentCount ?? 0,
+        likedByViewer: likedSet.has(p._id.toString()),
+        createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : new Date(p.createdAt).toISOString(),
+        author: {
+          userId: p.authorId,
+          username: authorProfile?.username || 'unknown',
+          name: authorProfile?.name ?? null,
+          avatarUrl: authorProfile ? computePublicUrl(authorProfile.avatarKey, authorProfile.updatedAt) : null,
+        },
+      };
+    });
+
+    return { data, hasMore };
   }
 }
 
