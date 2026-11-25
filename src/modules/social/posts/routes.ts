@@ -1,6 +1,23 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { authenticateRequest } from '../../../auth/hook.js';
-import { createPostRateLimiter, feedRateLimiter } from '../../../plugins/rate-limit.js';
+import {
+  createPostRateLimiter,
+  feedRateLimiter,
+  uploadUrlRateLimiter,
+  confirmUploadRateLimiter,
+  deleteMediaRateLimiter,
+} from '../../../plugins/rate-limit.js';
+import {
+  createPresignedUpload,
+  headObject,
+  deleteObject,
+  computePublicUrl,
+  isValidUserKey,
+  ACCEPTED_IMAGE_TYPES,
+  type AcceptedImageType,
+} from '../../../lib/r2.js';
+import { env } from '../../../config/env.js';
+import { BadRequestError, ForbiddenError } from '../../../utils/errors.js';
 import {
   createPostSchema,
   userIdParamSchema,
@@ -13,6 +30,16 @@ import { defaultPostLikeService } from '../likes/service.js';
 
 interface CreatePostBody {
   body: string;
+  imageKey?: string | null;
+}
+
+interface UploadUrlBody {
+  contentType: string;
+  contentLength: number;
+}
+
+interface ConfirmUploadBody {
+  objectKey: string;
 }
 
 interface PostIdParams {
@@ -29,6 +56,128 @@ interface PaginationQuery {
 }
 
 export const postRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
+  // Image upload endpoints
+  // POST /posts/image/upload-url
+  app.post<{ Body: UploadUrlBody }>(
+    '/posts/image/upload-url',
+    {
+      preHandler: [authenticateRequest, uploadUrlRateLimiter],
+      schema: {
+        description: 'Request a presigned POST slot for post image upload',
+        tags: ['Social - Media'],
+        body: {
+          type: 'object',
+          required: ['contentType', 'contentLength'],
+          properties: {
+            contentType: { type: 'string', enum: ['image/jpeg', 'image/png', 'image/webp'] },
+            contentLength: { type: 'number' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { contentType, contentLength } = request.body;
+      if (!ACCEPTED_IMAGE_TYPES.includes(contentType as any)) {
+        throw new BadRequestError('Unsupported image content type', 'unsupported_media_type');
+      }
+      if (contentLength > env.MAX_POST_IMAGE_BYTES) {
+        throw new BadRequestError(
+          `Content length exceeds maximum allowed post image size of ${env.MAX_POST_IMAGE_BYTES} bytes`,
+          'file_too_large'
+        );
+      }
+
+      const slot = await createPresignedUpload(
+        request.user.userId,
+        'post',
+        contentType as AcceptedImageType,
+        contentLength
+      );
+      return reply.status(200).send(slot);
+    }
+  );
+
+  // POST /posts/image/confirm
+  app.post<{ Body: ConfirmUploadBody }>(
+    '/posts/image/confirm',
+    {
+      preHandler: [authenticateRequest, confirmUploadRateLimiter],
+      schema: {
+        description: 'Confirm post image exists in storage before attaching to post',
+        tags: ['Social - Media'],
+        body: {
+          type: 'object',
+          required: ['objectKey'],
+          properties: {
+            objectKey: { type: 'string' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { objectKey } = request.body;
+      const { userId } = request.user;
+
+      if (!isValidUserKey(userId, 'post', objectKey)) {
+        throw new ForbiddenError(
+          'Object key does not belong to the authenticated user',
+          'forbidden'
+        );
+      }
+
+      const meta = await headObject(objectKey);
+      if (!meta) {
+        throw new BadRequestError('Object does not exist in storage', 'object_not_found');
+      }
+
+      if (meta.contentLength > env.MAX_POST_IMAGE_BYTES) {
+        throw new BadRequestError(
+          `Uploaded object exceeds maximum allowed post image size (${env.MAX_POST_IMAGE_BYTES} bytes)`,
+          'file_too_large'
+        );
+      }
+
+      if (!ACCEPTED_IMAGE_TYPES.includes(meta.contentType as any)) {
+        throw new BadRequestError(
+          `Uploaded object has unsupported content type: ${meta.contentType}`,
+          'unsupported_media_type'
+        );
+      }
+
+      return reply.status(200).send({
+        key: objectKey,
+        url: computePublicUrl(objectKey),
+      });
+    }
+  );
+
+  // DELETE /posts/image/*
+  app.delete(
+    '/posts/image/*',
+    {
+      preHandler: [authenticateRequest, deleteMediaRateLimiter],
+      schema: {
+        description: 'Delete orphan post image from storage',
+        tags: ['Social - Media'],
+      },
+    },
+    async (request, reply) => {
+      const { userId } = request.user;
+      const rawKey = (request.params as any)['*'] || (request.params as any).key;
+      const objectKey = decodeURIComponent(rawKey);
+
+      if (!isValidUserKey(userId, 'post', objectKey)) {
+        throw new ForbiddenError(
+          'Object key does not belong to the authenticated user',
+          'forbidden'
+        );
+      }
+
+      await deleteObject(objectKey);
+      return reply.status(204).send();
+    }
+  );
+
   // 0. GET /feed?limit=20&before=<ISO>
   app.get<{ Querystring: PaginationQuery }>(
     '/feed',
@@ -140,7 +289,11 @@ export const postRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     async (request: FastifyRequest<{ Body: CreatePostBody }>, reply: FastifyReply) => {
       const viewerId = request.user.userId;
       const parsedBody = createPostSchema.parse(request.body);
-      const post = await defaultPostService.createPost(viewerId, parsedBody.body);
+      const post = await defaultPostService.createPost(
+        viewerId,
+        parsedBody.body,
+        parsedBody.imageKey
+      );
       return reply.status(201).send(post);
     }
   );

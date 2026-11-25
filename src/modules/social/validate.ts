@@ -45,3 +45,24 @@ export const likesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(30),
   before: z.string().datetime().optional(),
 });
+
+export const createCommentSchema = z.object({
+  body: z
+    .string()
+    .transform((val) => sanitizePostBody(val))
+    .refine((val) => val.length >= 1, {
+      message: 'Comment body must not be empty',
+    })
+    .refine((val) => val.length <= 300, {
+      message: 'Comment body cannot exceed 300 characters',
+    }),
+});
+
+export const commentsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(30),
+  before: z.string().datetime().optional(),
+});
+
+export const commentIdParamSchema = z.object({
+  id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid comment ID format'),
+});

@@ -150,3 +150,10 @@ export const feedRateLimiter = createRedisRateLimiter({
   keyPrefix: 'ratelimit:feed',
   keyGenerator: userKeyGen,
 });
+
+export const createCommentRateLimiter = createRedisRateLimiter({
+  limit: 30,
+  windowSeconds: 3600,
+  keyPrefix: 'ratelimit:comments_create',
+  keyGenerator: userKeyGen,
+});

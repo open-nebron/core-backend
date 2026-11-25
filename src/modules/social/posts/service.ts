@@ -2,6 +2,7 @@ import { ObjectId, type Db, type MongoClient } from 'mongodb';
 import { PostRepository, defaultPostRepository } from './repository.js';
 import { PostLikeRepository, defaultPostLikeRepository } from '../likes/repository.js';
 import { FollowRepository, defaultFollowRepository } from '../follows/repository.js';
+import { CommentService, defaultCommentService, type CommentResponse } from '../comments/service.js';
 import {
   SocialEventPublisher,
   defaultSocialEventPublisher,
@@ -21,7 +22,8 @@ import {
   BadRequestError,
   NotPostAuthorError,
 } from '../../../utils/errors.js';
-import { computePublicUrl } from '../../../lib/r2.js';
+import { computePublicUrl, isValidUserKey, headObject, ACCEPTED_IMAGE_TYPES } from '../../../lib/r2.js';
+import { env } from '../../../config/env.js';
 import { sanitizePostBody } from '../validate.js';
 
 export interface AuthorSummary {
@@ -39,6 +41,7 @@ export interface PostResponse {
   likeCount: number;
   commentCount: number;
   likedByViewer: boolean;
+  comments?: CommentResponse[];
   createdAt: string;
   author: AuthorSummary;
 }
@@ -47,6 +50,7 @@ export class PostService {
   private repo: PostRepository;
   private likeRepo: PostLikeRepository;
   private followRepo: FollowRepository;
+  private commentService: CommentService;
   private publisher: SocialEventPublisher;
   private customDb?: Db;
   private customClient?: MongoClient;
@@ -55,6 +59,7 @@ export class PostService {
     repo?: PostRepository,
     likeRepo?: PostLikeRepository,
     followRepo?: FollowRepository,
+    commentService?: CommentService,
     publisher?: SocialEventPublisher,
     customDb?: Db,
     customClient?: MongoClient
@@ -62,6 +67,7 @@ export class PostService {
     this.repo = repo ?? (customDb ? new PostRepository(customDb) : defaultPostRepository);
     this.likeRepo = likeRepo ?? (customDb ? new PostLikeRepository(customDb) : defaultPostLikeRepository);
     this.followRepo = followRepo ?? (customDb ? new FollowRepository(customDb) : defaultFollowRepository);
+    this.commentService = commentService ?? (customDb ? new CommentService(undefined, undefined, undefined, customDb, customClient) : defaultCommentService);
     this.publisher = publisher ?? defaultSocialEventPublisher;
     this.customDb = customDb;
     this.customClient = customClient;
@@ -78,13 +84,51 @@ export class PostService {
     return new ObjectId(id);
   }
 
-  async createPost(authorId: string, rawBody: string): Promise<PostResponse> {
+  async createPost(
+    authorId: string,
+    rawBody: string,
+    imageKey?: string | null
+  ): Promise<PostResponse> {
     const body = sanitizePostBody(rawBody);
     if (!body || body.length < 1) {
       throw new BadRequestError('Post body must not be empty', 'empty_body');
     }
     if (body.length > 500) {
       throw new BadRequestError('Post body cannot exceed 500 characters', 'body_too_long');
+    }
+
+    let finalImageKey: string | null = null;
+    let finalImageUrl: string | null = null;
+
+    if (imageKey) {
+      if (!isValidUserKey(authorId, 'post', imageKey)) {
+        throw new ForbiddenError(
+          'Image key does not belong to the authenticated user',
+          'forbidden'
+        );
+      }
+
+      const meta = await headObject(imageKey);
+      if (!meta) {
+        throw new BadRequestError('Image does not exist in storage', 'object_not_found');
+      }
+
+      if (meta.contentLength > env.MAX_POST_IMAGE_BYTES) {
+        throw new BadRequestError(
+          `Image exceeds maximum allowed size of ${env.MAX_POST_IMAGE_BYTES} bytes`,
+          'file_too_large'
+        );
+      }
+
+      if (!ACCEPTED_IMAGE_TYPES.includes(meta.contentType as any)) {
+        throw new BadRequestError(
+          `Unsupported image content type: ${meta.contentType}`,
+          'unsupported_media_type'
+        );
+      }
+
+      finalImageKey = imageKey;
+      finalImageUrl = computePublicUrl(imageKey);
     }
 
     const now = new Date();
@@ -95,8 +139,8 @@ export class PostService {
         {
           authorId,
           body,
-          imageKey: null,
-          imageUrl: null,
+          imageKey: finalImageKey,
+          imageUrl: finalImageUrl,
           likeCount: 0,
           commentCount: 0,
           deleted: false,
@@ -112,7 +156,7 @@ export class PostService {
       postId: createdPost._id.toString(),
       authorId,
       body,
-      hasImage: false,
+      hasImage: Boolean(finalImageKey),
       createdAt: now.toISOString(),
     });
 
@@ -121,11 +165,12 @@ export class PostService {
     return {
       id: createdPost._id.toString(),
       body: createdPost.body,
-      imageKey: null,
-      imageUrl: null,
+      imageKey: finalImageKey,
+      imageUrl: finalImageUrl,
       likeCount: 0,
       commentCount: 0,
       likedByViewer: false,
+      comments: [],
       createdAt: now.toISOString(),
       author: {
         userId: authorId,
@@ -153,6 +198,7 @@ export class PostService {
 
     const postIds = posts.map((p) => p._id);
     const likedSet = await this.likeRepo.hasLikedBatch(viewerId, postIds);
+    const commentsMap = await this.commentService.getBatchRecentPreview(postIds, viewerId, 3);
 
     const authorProfile = await this.getProfilesCol().findOne({ userId: targetUserId });
     const authorSummary: AuthorSummary = {
@@ -170,6 +216,7 @@ export class PostService {
       likeCount: p.likeCount ?? 0,
       commentCount: p.commentCount ?? 0,
       likedByViewer: likedSet.has(p._id.toString()),
+      comments: commentsMap.get(p._id.toString()) || [],
       createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : new Date(p.createdAt).toISOString(),
       author: authorSummary,
     }));
@@ -190,6 +237,7 @@ export class PostService {
 
     const liked = await this.likeRepo.findLike(postId, viewerId);
     const authorProfile = await this.getProfilesCol().findOne({ userId: post.authorId });
+    const commentsPreview = await this.commentService.getRecentPreview(postId, viewerId, 3);
 
     return {
       id: post._id.toString(),
@@ -199,6 +247,7 @@ export class PostService {
       likeCount: post.likeCount ?? 0,
       commentCount: post.commentCount ?? 0,
       likedByViewer: !!liked,
+      comments: commentsPreview,
       createdAt: post.createdAt instanceof Date ? post.createdAt.toISOString() : new Date(post.createdAt).toISOString(),
       author: {
         userId: post.authorId,
@@ -271,6 +320,8 @@ export class PostService {
       profileMap.set(p.userId, p);
     }
 
+    const commentsMap = await this.commentService.getBatchRecentPreview(postIds, viewerId, 3);
+
     const data: PostResponse[] = posts.map((p) => {
       const authorProfile = profileMap.get(p.authorId);
       return {
@@ -281,6 +332,7 @@ export class PostService {
         likeCount: p.likeCount ?? 0,
         commentCount: p.commentCount ?? 0,
         likedByViewer: likedSet.has(p._id.toString()),
+        comments: commentsMap.get(p._id.toString()) || [],
         createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : new Date(p.createdAt).toISOString(),
         author: {
           userId: p.authorId,
