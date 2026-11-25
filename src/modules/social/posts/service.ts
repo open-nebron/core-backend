@@ -283,6 +283,26 @@ export class PostService {
     });
   }
 
+  async adminDeletePost(postIdStr: string): Promise<void> {
+    const postId = this.parseObjectId(postIdStr);
+
+    const post = await this.repo.getPostById(postId);
+    if (!post || post.deleted) {
+      throw new NotFoundError('Post not found', 'post_not_found');
+    }
+
+    await runInTransaction(this.customClient, async (session) => {
+      await this.repo.softDeletePost(postId, session);
+      await this.repo.decrementProfilePostCount(post.authorId, session);
+    });
+
+    await this.publisher.publishPostDeleted({
+      postId: postId.toString(),
+      authorId: post.authorId,
+      at: new Date().toISOString(),
+    });
+  }
+
   async getFeed(
     viewerId: string,
     limit: number = 20,

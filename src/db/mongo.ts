@@ -21,6 +21,7 @@ export interface ProfileDocument {
   _id?: any;
   userId: string;
   username: string;
+  email?: string | null;
   name: string | null;
   dateOfBirth: Date | string | null;
   about: string | null;
@@ -36,6 +37,10 @@ export interface ProfileDocument {
   followerCount?: number;
   followingCount?: number;
   postCount?: number;
+  isAdmin?: boolean;
+  isBanned?: boolean;
+  bannedAt?: Date | null;
+  bannedReason?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -73,6 +78,52 @@ export interface FollowDocument {
   _id?: any;
   followerId: string;
   followingId: string;
+  createdAt: Date;
+}
+
+export type ReportTargetType = 'user' | 'post' | 'comment' | 'message';
+export type ReportReason =
+  | 'spam'
+  | 'harassment'
+  | 'hate'
+  | 'sexual'
+  | 'violence'
+  | 'self_harm'
+  | 'impersonation'
+  | 'other';
+export type ReportStatus = 'pending' | 'resolved' | 'dismissed';
+
+export interface ReportDocument {
+  _id?: any;
+  reporterId: string;
+  targetType: ReportTargetType;
+  targetId: string;
+  targetOwnerId: string;
+  reason: ReportReason;
+  details?: string;
+  status: ReportStatus;
+  resolvedBy: string | null;
+  resolvedAt: Date | null;
+  resolutionNote: string | null;
+  createdAt: Date;
+}
+
+export type AdminActionType =
+  | 'dismiss_report'
+  | 'resolve_report'
+  | 'ban_user'
+  | 'delete_post'
+  | 'delete_comment'
+  | 'warn_user';
+export type AdminActionTargetType = 'user' | 'post' | 'comment' | 'report';
+
+export interface AdminActionDocument {
+  _id?: any;
+  adminId: string;
+  action: AdminActionType;
+  targetType: AdminActionTargetType;
+  targetId: string;
+  details?: Record<string, any>;
   createdAt: Date;
 }
 
@@ -132,6 +183,15 @@ export async function initMongoIndexes(database: Db): Promise<void> {
   await follows.createIndex({ followerId: 1, followingId: 1 }, { unique: true, name: 'idx_follows_follower_following_unique' });
   await follows.createIndex({ followingId: 1 }, { name: 'idx_follows_followingId' });
 
+  const reports = database.collection<ReportDocument>('reports');
+  await reports.createIndex({ status: 1, createdAt: -1 }, { name: 'idx_reports_status_createdAt' });
+  await reports.createIndex({ targetType: 1, targetId: 1 }, { name: 'idx_reports_target' });
+  await reports.createIndex({ reporterId: 1, createdAt: -1 }, { name: 'idx_reports_reporterId_createdAt' });
+
+  const adminActions = database.collection<AdminActionDocument>('admin_actions');
+  await adminActions.createIndex({ adminId: 1, createdAt: -1 }, { name: 'idx_admin_actions_adminId_createdAt' });
+  await adminActions.createIndex({ targetType: 1, targetId: 1 }, { name: 'idx_admin_actions_target' });
+
   // Migration: rename any legacy profilePicUrl field
   try {
     await profiles.updateMany(
@@ -184,6 +244,14 @@ export function getFollowsCollection(dbInstance?: Db): Collection<FollowDocument
     } as any;
   }
   return targetDb.collection<FollowDocument>('follows');
+}
+
+export function getReportsCollection(dbInstance?: Db): Collection<ReportDocument> {
+  return (dbInstance ?? getDb()).collection<ReportDocument>('reports');
+}
+
+export function getAdminActionsCollection(dbInstance?: Db): Collection<AdminActionDocument> {
+  return (dbInstance ?? getDb()).collection<AdminActionDocument>('admin_actions');
 }
 
 export async function runInTransaction<T>(

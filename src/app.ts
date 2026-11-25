@@ -11,6 +11,7 @@ import { followRoutes } from './modules/social/follows/routes.js';
 import { postRoutes } from './modules/social/posts/routes.js';
 import { commentRoutes } from './modules/social/comments/routes.js';
 import { userRoutes } from './modules/users/user.routes.js';
+import { reportRoutes } from './modules/reports/reports.routes.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
   const isDev = env.NODE_ENV === 'development';
@@ -80,6 +81,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(postRoutes);
   await app.register(commentRoutes);
   await app.register(userRoutes);
+  await app.register(reportRoutes);
 
   return app;
 }

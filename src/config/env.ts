@@ -33,6 +33,16 @@ const envSchema = z
 
     // Internal operations token (cron / orphan cleanup)
     INTERNAL_TOKEN: z.string().default('dev-internal-token'),
+
+    // Cross-service URLs
+    AUTH_SERVICE_URL: z.string().default('http://localhost:4001'),
+    CHAT_SERVICE_URL: z.string().default('http://localhost:4003'),
+    VOICE_SERVICE_URL: z.string().default('http://localhost:4004'),
+
+    // Decisions & Notifications
+    DECISION_REPORTS_NOTIFY: z.enum(['email', 'dashboard']).default('email'),
+    ADMIN_NOTIFICATION_EMAIL: z.string().default('admin@nebron.com'),
+    RESEND_API_KEY: z.string().optional(),
   })
   .refine(
     (data) => {

@@ -208,6 +208,7 @@ export class ProfileService {
     const doc: ProfileDocument = {
       userId,
       username,
+      email: email || null,
       name: null,
       dateOfBirth: null,
       about: null,

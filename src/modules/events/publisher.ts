@@ -5,6 +5,10 @@ import type {
   CoreRelationshipUnblocked,
   CoreRelationshipMuted,
   CoreRelationshipUnmuted,
+  CoreReportCreated,
+  CoreReportResolved,
+  CoreUserBanned,
+  CoreUserUnbanned,
 } from '@nebron/contracts';
 
 export class RedisStreamsEventPublisher {
@@ -41,6 +45,22 @@ export class RedisStreamsEventPublisher {
 
   async publishRelationshipUnmuted(payload: CoreRelationshipUnmuted): Promise<void> {
     await this.publish('core.relationship.unmuted', payload);
+  }
+
+  async publishReportCreated(payload: CoreReportCreated): Promise<void> {
+    await this.publish('core.report.created', payload);
+  }
+
+  async publishReportResolved(payload: CoreReportResolved): Promise<void> {
+    await this.publish('core.report.resolved', payload);
+  }
+
+  async publishUserBanned(payload: CoreUserBanned): Promise<void> {
+    await this.publish('core.user.banned', payload);
+  }
+
+  async publishUserUnbanned(payload: CoreUserUnbanned): Promise<void> {
+    await this.publish('core.user.unbanned', payload);
   }
 }
 

@@ -1,6 +1,8 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { verifyAccessToken } from './jwt.js';
-import { UnauthorizedError } from '../utils/errors.js';
+import { UnauthorizedError, ForbiddenError } from '../utils/errors.js';
+import { checkUserBanned } from './ban-check.js';
+import { getProfilesCollection, type ProfileDocument } from '../db/mongo.js';
 
 export async function authenticateRequest(
   request: FastifyRequest,
@@ -20,4 +22,21 @@ export async function authenticateRequest(
 
   const user = await verifyAccessToken(token.trim());
   request.user = user;
+
+  // Check ban status on every authenticated request
+  await checkUserBanned(user.userId);
+}
+
+export async function requireAdmin(
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> {
+  await authenticateRequest(request, reply);
+
+  const profile = await getProfilesCollection().findOne({ userId: request.user.userId });
+  if (!profile || !profile.isAdmin) {
+    throw new ForbiddenError('Admin access required', 'not_admin');
+  }
+
+  (request as any).adminProfile = profile;
 }

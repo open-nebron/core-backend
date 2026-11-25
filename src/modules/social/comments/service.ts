@@ -225,6 +225,27 @@ export class CommentService {
     });
   }
 
+  async adminDeleteComment(commentIdStr: string): Promise<void> {
+    const commentId = this.parseObjectId(commentIdStr, 'Comment');
+
+    const comment = await this.repo.getCommentById(commentId);
+    if (!comment || comment.deleted) {
+      throw new NotFoundError('Comment not found', 'comment_not_found');
+    }
+
+    await runInTransaction(this.customClient, async (session) => {
+      await this.repo.softDeleteComment(commentId, session);
+      await this.repo.decrementCommentCount(comment.postId, session);
+    });
+
+    await this.publisher.publishCommentDeleted({
+      commentId: commentId.toString(),
+      postId: comment.postId.toString(),
+      commentAuthorId: comment.authorId,
+      at: new Date().toISOString(),
+    });
+  }
+
   async getRecentPreview(
     postId: ObjectId,
     viewerId: string,

@@ -104,11 +104,30 @@ export class InternalNotConfiguredError extends AppError {
   }
 }
 
+export class AccountBannedError extends AppError {
+  public readonly reason: string | null;
+
+  constructor(reason: string | null = null, message: string = 'Your account has been suspended') {
+    super(403, 'account_banned', message);
+    this.reason = reason;
+  }
+}
+
 export function fastifyErrorHandler(
   error: FastifyError | Error,
   request: FastifyRequest,
   reply: FastifyReply
 ) {
+  if (error instanceof AccountBannedError) {
+    return reply.status(403).send({
+      error: {
+        code: error.code,
+        message: error.message,
+        reason: error.reason,
+      },
+    });
+  }
+
   // App-specific operational errors
   if (error instanceof AppError) {
     return reply.status(error.statusCode).send({
