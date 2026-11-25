@@ -7,6 +7,9 @@ import { registerSwagger } from './plugins/swagger.js';
 import { profileRoutes } from './modules/profiles/profile.routes.js';
 import { healthRoutes } from './modules/health/health.routes.js';
 import { relationshipRoutes } from './modules/relationships/routes.js';
+import { followRoutes } from './modules/social/follows/routes.js';
+import { postRoutes } from './modules/social/posts/routes.js';
+import { commentRoutes } from './modules/social/comments/routes.js';
 import { userRoutes } from './modules/users/user.routes.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
@@ -73,6 +76,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(healthRoutes);
   await app.register(profileRoutes);
   await app.register(relationshipRoutes);
+  await app.register(followRoutes);
+  await app.register(postRoutes);
+  await app.register(commentRoutes);
   await app.register(userRoutes);
 
   return app;

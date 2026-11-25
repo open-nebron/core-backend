@@ -136,3 +136,24 @@ export const userGetRateLimiter = createRedisRateLimiter({
   keyPrefix: 'ratelimit:user_get',
   keyGenerator: userKeyGen,
 });
+
+export const createPostRateLimiter = createRedisRateLimiter({
+  limit: 10,
+  windowSeconds: 3600,
+  keyPrefix: 'ratelimit:posts_create',
+  keyGenerator: userKeyGen,
+});
+
+export const feedRateLimiter = createRedisRateLimiter({
+  limit: 100,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:feed',
+  keyGenerator: userKeyGen,
+});
+
+export const createCommentRateLimiter = createRedisRateLimiter({
+  limit: 30,
+  windowSeconds: 3600,
+  keyPrefix: 'ratelimit:comments_create',
+  keyGenerator: userKeyGen,
+});

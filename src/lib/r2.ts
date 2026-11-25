@@ -9,7 +9,7 @@ import {
 import { createPresignedPost, type PresignedPost } from '@aws-sdk/s3-presigned-post';
 import { env } from '../config/env.js';
 
-export type MediaKind = 'avatar' | 'banner';
+export type MediaKind = 'avatar' | 'banner' | 'post';
 
 export const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export type AcceptedImageType = (typeof ACCEPTED_IMAGE_TYPES)[number];
@@ -46,10 +46,16 @@ export function getS3Client(): S3Client {
 export function generateObjectKey(userId: string, kind: MediaKind, contentType: AcceptedImageType): string {
   const ext = MIME_TO_EXTENSION[contentType] || 'jpg';
   const uuid = crypto.randomUUID();
+  if (kind === 'post') {
+    return `posts/${userId}/${uuid}.${ext}`;
+  }
   return `users/${userId}/${kind}/${uuid}.${ext}`;
 }
 
 export function isValidUserKey(userId: string, kind: MediaKind, objectKey: string): boolean {
+  if (kind === 'post') {
+    return objectKey.startsWith(`posts/${userId}/`);
+  }
   const expectedPrefix = `users/${userId}/${kind}/`;
   return objectKey.startsWith(expectedPrefix);
 }
@@ -72,7 +78,12 @@ export async function createPresignedUpload(
   contentLength: number
 ): Promise<PresignedUploadSlot> {
   const s3 = getS3Client();
-  const maxBytes = kind === 'avatar' ? env.MAX_AVATAR_BYTES : env.MAX_BANNER_BYTES;
+  const maxBytes =
+    kind === 'avatar'
+      ? env.MAX_AVATAR_BYTES
+      : kind === 'banner'
+      ? env.MAX_BANNER_BYTES
+      : env.MAX_POST_IMAGE_BYTES;
 
   const objectKey = generateObjectKey(userId, kind, contentType);
   const expiresInSeconds = 300; // 5 minutes
