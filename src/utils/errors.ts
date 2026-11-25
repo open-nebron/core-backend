@@ -56,6 +56,24 @@ export class SelfActionNotAllowedError extends AppError {
   }
 }
 
+export class SelfFollowNotAllowedError extends AppError {
+  constructor(message: string = 'Self follow is not allowed') {
+    super(400, 'self_follow_not_allowed', message);
+  }
+}
+
+export class BlockedError extends AppError {
+  constructor(message: string = 'User is blocked') {
+    super(403, 'blocked', message);
+  }
+}
+
+export class NotPostAuthorError extends AppError {
+  constructor(message: string = 'You are not the author of this post') {
+    super(403, 'not_post_author', message);
+  }
+}
+
 export class EmptyMuteError extends AppError {
   constructor(message: string = 'Mute request body is empty or invalid') {
     super(400, 'empty_mute', message);

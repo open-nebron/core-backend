@@ -1,10 +1,11 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { authenticateRequest } from '../../auth/hook.js';
 import { userSearchRateLimiter, userGetRateLimiter } from '../../plugins/rate-limit.js';
-import { getProfilesCollection, type ProfileDocument, DEFAULT_PRIVACY } from '../../db/mongo.js';
-import { NotFoundError } from '../../utils/errors.js';
+import { getProfilesCollection, getFollowsCollection, type ProfileDocument, DEFAULT_PRIVACY } from '../../db/mongo.js';
+import { NotFoundError, BlockedError } from '../../utils/errors.js';
 import { computePublicUrl } from '../../lib/r2.js';
 import { env } from '../../config/env.js';
+import { getBlockedUserIds, isBlockedPair } from '../social/block-filter.js';
 
 interface SearchUsersQuery {
   q?: string;
@@ -64,6 +65,8 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
                     username: { type: 'string' },
                     name: { type: 'string', nullable: true },
                     avatarUrl: { type: 'string', nullable: true },
+                    followerCount: { type: 'integer' },
+                    isFollowingViewer: { type: 'boolean' },
                   },
                   required: ['userId', 'username'],
                 },
@@ -96,14 +99,36 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
             { name: { $regex: regex } },
           ],
         })
-        .limit(limit)
+        .limit(limit * 2)
         .toArray();
 
-      const users = docs.map((doc: ProfileDocument) => ({
+      const viewerId = request.user?.userId;
+      let candidateDocs = docs;
+
+      if (viewerId) {
+        const candidateIds = docs.map((d) => d.userId);
+        const blockedIds = await getBlockedUserIds(viewerId, candidateIds);
+        candidateDocs = docs.filter((d) => !blockedIds.has(d.userId));
+      }
+
+      const selectedDocs = candidateDocs.slice(0, limit);
+      const selectedUserIds = selectedDocs.map((d) => d.userId);
+
+      let followingViewerSet = new Set<string>();
+      if (viewerId && selectedUserIds.length > 0) {
+        const followDocs = await getFollowsCollection()
+          .find({ followerId: { $in: selectedUserIds }, followingId: viewerId })
+          .toArray();
+        followingViewerSet = new Set(followDocs.map((d) => d.followerId));
+      }
+
+      const users = selectedDocs.map((doc: ProfileDocument) => ({
         userId: doc.userId,
         username: doc.username,
         name: doc.name ?? null,
         avatarUrl: computePublicUrl(doc.avatarKey, doc.updatedAt),
+        followerCount: doc.followerCount ?? 0,
+        isFollowingViewer: followingViewerSet.has(doc.userId),
       }));
 
       return reply.status(200).send({ users });
@@ -152,6 +177,26 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         throw new NotFoundError(`User with username '${username}' not found`);
       }
 
+      const viewerId = request.user?.userId;
+      let isFollowingViewer = false;
+      let isFollowedByViewer = false;
+
+      if (viewerId) {
+        const isBlocked = await isBlockedPair(viewerId, doc.userId);
+        if (isBlocked) {
+          throw new BlockedError();
+        }
+
+        if (viewerId !== doc.userId) {
+          const [f1, f2] = await Promise.all([
+            getFollowsCollection().findOne({ followerId: doc.userId, followingId: viewerId }),
+            getFollowsCollection().findOne({ followerId: viewerId, followingId: doc.userId }),
+          ]);
+          isFollowingViewer = !!f1;
+          isFollowedByViewer = !!f2;
+        }
+      }
+
       return reply.status(200).send({
         userId: doc.userId,
         username: doc.username,
@@ -160,6 +205,11 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         bannerUrl: computePublicUrl(doc.bannerKey, doc.updatedAt),
         bio: doc.bio ?? null,
         about: doc.about ?? null,
+        followerCount: doc.followerCount ?? 0,
+        followingCount: doc.followingCount ?? 0,
+        postCount: doc.postCount ?? 0,
+        isFollowingViewer,
+        isFollowedByViewer,
         createdAt: doc.createdAt instanceof Date ? doc.createdAt.toISOString() : new Date(doc.createdAt).toISOString(),
       });
     }
@@ -275,6 +325,24 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
             ? doc.lastSeenAt.toISOString()
             : new Date(doc.lastSeenAt).toISOString();
       }
+
+      let isFollowingViewer = false;
+      let isFollowedByViewer = false;
+      const viewerId = request.user?.userId;
+      if (viewerId && viewerId !== doc.userId) {
+        const [f1, f2] = await Promise.all([
+          getFollowsCollection().findOne({ followerId: doc.userId, followingId: viewerId }),
+          getFollowsCollection().findOne({ followerId: viewerId, followingId: doc.userId }),
+        ]);
+        isFollowingViewer = !!f1;
+        isFollowedByViewer = !!f2;
+      }
+
+      responseObj.followerCount = doc.followerCount ?? 0;
+      responseObj.followingCount = doc.followingCount ?? 0;
+      responseObj.postCount = doc.postCount ?? 0;
+      responseObj.isFollowingViewer = isFollowingViewer;
+      responseObj.isFollowedByViewer = isFollowedByViewer;
 
       return reply.status(200).send(responseObj);
     }

@@ -1,4 +1,4 @@
-import { MongoClient, Db, Collection } from 'mongodb';
+import { MongoClient, Db, Collection, ClientSession } from 'mongodb';
 import { env } from '../config/env.js';
 
 export type UserTheme = 'light' | 'dark' | 'system';
@@ -33,8 +33,47 @@ export interface ProfileDocument {
   lastSeenAt?: Date | string | null;
   avatarKey: string | null;
   bannerKey: string | null;
+  followerCount?: number;
+  followingCount?: number;
+  postCount?: number;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface PostDocument {
+  _id?: any;
+  authorId: string;
+  body: string;
+  imageKey: string | null;
+  imageUrl: string | null;
+  likeCount: number;
+  commentCount: number;
+  deleted: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface PostLikeDocument {
+  _id?: any;
+  postId: any;
+  userId: string;
+  createdAt: Date;
+}
+
+export interface CommentDocument {
+  _id?: any;
+  postId: any;
+  authorId: string;
+  body: string;
+  deleted: boolean;
+  createdAt: Date;
+}
+
+export interface FollowDocument {
+  _id?: any;
+  followerId: string;
+  followingId: string;
+  createdAt: Date;
 }
 
 let client: MongoClient | null = null;
@@ -76,6 +115,23 @@ export async function initMongoIndexes(database: Db): Promise<void> {
     { name: 'idx_relationships_from_blocked' }
   );
 
+  const posts = database.collection<PostDocument>('posts');
+  await posts.createIndex({ authorId: 1, createdAt: -1 }, { name: 'idx_posts_authorId_createdAt' });
+  await posts.createIndex({ createdAt: -1 }, { name: 'idx_posts_createdAt' });
+  await posts.createIndex({ deleted: 1, createdAt: -1 }, { name: 'idx_posts_deleted_createdAt' });
+
+  const postLikes = database.collection<PostLikeDocument>('post_likes');
+  await postLikes.createIndex({ postId: 1, userId: 1 }, { unique: true, name: 'idx_post_likes_postId_userId_unique' });
+  await postLikes.createIndex({ userId: 1 }, { name: 'idx_post_likes_userId' });
+
+  const comments = database.collection<CommentDocument>('comments');
+  await comments.createIndex({ postId: 1, createdAt: 1 }, { name: 'idx_comments_postId_createdAt' });
+  await comments.createIndex({ authorId: 1 }, { name: 'idx_comments_authorId' });
+
+  const follows = database.collection<FollowDocument>('follows');
+  await follows.createIndex({ followerId: 1, followingId: 1 }, { unique: true, name: 'idx_follows_follower_following_unique' });
+  await follows.createIndex({ followingId: 1 }, { name: 'idx_follows_followingId' });
+
   // Migration: rename any legacy profilePicUrl field
   try {
     await profiles.updateMany(
@@ -94,8 +150,77 @@ export function getDb(): Db {
   return db;
 }
 
-export function getProfilesCollection(): Collection<ProfileDocument> {
-  return getDb().collection<ProfileDocument>('profiles');
+export function getProfilesCollection(dbInstance?: Db): Collection<ProfileDocument> {
+  return (dbInstance ?? getDb()).collection<ProfileDocument>('profiles');
+}
+
+export function getMongoClient(): MongoClient {
+  if (!client) {
+    throw new Error('MongoClient not initialized. Call connectMongo() first.');
+  }
+  return client;
+}
+
+export function getPostsCollection(dbInstance?: Db): Collection<PostDocument> {
+  return (dbInstance ?? getDb()).collection<PostDocument>('posts');
+}
+
+export function getPostLikesCollection(dbInstance?: Db): Collection<PostLikeDocument> {
+  return (dbInstance ?? getDb()).collection<PostLikeDocument>('post_likes');
+}
+
+export function getCommentsCollection(dbInstance?: Db): Collection<CommentDocument> {
+  return (dbInstance ?? getDb()).collection<CommentDocument>('comments');
+}
+
+export function getFollowsCollection(dbInstance?: Db): Collection<FollowDocument> {
+  const targetDb = dbInstance ?? db;
+  if (!targetDb) {
+    return {
+      find: () => ({ toArray: async () => [] }),
+      findOne: async () => null,
+      updateOne: async () => ({ upsertedCount: 0 }),
+      deleteOne: async () => ({ deletedCount: 0 }),
+    } as any;
+  }
+  return targetDb.collection<FollowDocument>('follows');
+}
+
+export async function runInTransaction<T>(
+  customClient: MongoClient | undefined,
+  fn: (session?: ClientSession) => Promise<T>
+): Promise<T> {
+  const c = customClient ?? getMongoClient();
+  const topologyType = (c as any).topology?.description?.type;
+  const isReplicaSetOrSharded =
+    topologyType === 'ReplicaSetWithPrimary' ||
+    topologyType === 'ReplicaSetNoPrimary' ||
+    topologyType === 'Sharded';
+
+  if (!isReplicaSetOrSharded) {
+    return await fn(undefined);
+  }
+
+  const session = c.startSession();
+  try {
+    let result: T;
+    await session.withTransaction(async () => {
+      result = await fn(session);
+    });
+    return result!;
+  } catch (err: any) {
+    if (
+      err?.message?.includes('replica set') ||
+      err?.message?.includes('Transaction numbers are only allowed') ||
+      err?.message?.includes('does not support retryable writes') ||
+      err?.originalError?.message?.includes('Transaction numbers')
+    ) {
+      return await fn(undefined);
+    }
+    throw err;
+  } finally {
+    await session.endSession();
+  }
 }
 
 export async function isMongoHealthy(): Promise<boolean> {
