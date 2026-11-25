@@ -20,10 +20,13 @@ import { env } from '../../../config/env.js';
 import { BadRequestError, ForbiddenError } from '../../../utils/errors.js';
 import {
   createPostSchema,
+  editPostSchema,
   userIdParamSchema,
   postIdParamSchema,
   postsQuerySchema,
   likesQuerySchema,
+  popularPostsQuerySchema,
+  userLikesQuerySchema,
 } from '../validate.js';
 import { defaultPostService } from './service.js';
 import { defaultPostLikeService } from '../likes/service.js';
@@ -495,6 +498,92 @@ export const postRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         parsedQuery.before
       );
       return reply.status(200).send(likers);
+    }
+  );
+
+  // 8. PATCH /posts/:id
+  app.patch<{ Params: PostIdParams; Body: { body?: string; removeImage?: boolean } }>(
+    '/posts/:id',
+    {
+      preHandler: [authenticateRequest],
+      schema: {
+        description: 'Edit own post body or remove image',
+        tags: ['Social - Posts'],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+          },
+          required: ['id'],
+        },
+        body: {
+          type: 'object',
+          properties: {
+            body: { type: 'string', minLength: 1, maxLength: 500 },
+            removeImage: { type: 'boolean' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const viewerId = request.user.userId;
+      postIdParamSchema.parse(request.params);
+      const parsedBody = editPostSchema.parse(request.body);
+      const updated = await defaultPostService.editPost(viewerId, request.params.id, parsedBody);
+      return reply.status(200).send(updated);
+    }
+  );
+
+  // 9. GET /posts/popular?limit=20
+  app.get<{ Querystring: { limit?: number } }>(
+    '/posts/popular',
+    {
+      preHandler: [authenticateRequest],
+      schema: {
+        description: 'Get top posts from the last 7 days sorted by likeCount DESC',
+        tags: ['Social - Posts'],
+        querystring: {
+          type: 'object',
+          properties: {
+            limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const viewerId = request.user.userId;
+      const parsedQuery = popularPostsQuerySchema.parse(request.query);
+      const posts = await defaultPostService.getPopular(viewerId, parsedQuery.limit);
+      return reply.status(200).send(posts);
+    }
+  );
+
+  // 10. GET /users/me/likes?limit=20&before=<ISO>
+  app.get<{ Querystring: PaginationQuery }>(
+    '/users/me/likes',
+    {
+      preHandler: [authenticateRequest],
+      schema: {
+        description: 'Get posts liked by current user',
+        tags: ['Social - Posts'],
+        querystring: {
+          type: 'object',
+          properties: {
+            limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
+            before: { type: 'string', format: 'date-time' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const viewerId = request.user.userId;
+      const parsedQuery = userLikesQuerySchema.parse(request.query);
+      const posts = await defaultPostService.getViewerLikedPosts(
+        viewerId,
+        parsedQuery.limit,
+        parsedQuery.before
+      );
+      return reply.status(200).send(posts);
     }
   );
 };

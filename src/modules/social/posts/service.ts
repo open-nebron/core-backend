@@ -22,7 +22,7 @@ import {
   BadRequestError,
   NotPostAuthorError,
 } from '../../../utils/errors.js';
-import { computePublicUrl, isValidUserKey, headObject, ACCEPTED_IMAGE_TYPES } from '../../../lib/r2.js';
+import { computePublicUrl, isValidUserKey, headObject, deleteObject, ACCEPTED_IMAGE_TYPES } from '../../../lib/r2.js';
 import { env } from '../../../config/env.js';
 import { sanitizePostBody } from '../validate.js';
 
@@ -43,6 +43,7 @@ export interface PostResponse {
   likedByViewer: boolean;
   comments?: CommentResponse[];
   createdAt: string;
+  updatedAt?: string;
   author: AuthorSummary;
 }
 
@@ -344,6 +345,191 @@ export class PostService {
     });
 
     return { data, hasMore };
+  }
+
+  async editPost(
+    viewerId: string,
+    postIdStr: string,
+    patch: { body?: string; removeImage?: boolean }
+  ): Promise<PostResponse> {
+    const postId = this.parseObjectId(postIdStr);
+
+    const post = await this.repo.getPostById(postId);
+    if (!post) {
+      throw new NotFoundError('Post not found', 'post_not_found');
+    }
+    if (post.deleted) {
+      throw new BadRequestError('Cannot edit deleted post', 'post_deleted');
+    }
+
+    if (post.authorId !== viewerId) {
+      throw new NotPostAuthorError();
+    }
+
+    if (patch.body === undefined && patch.removeImage === undefined) {
+      throw new BadRequestError('At least one of body or removeImage must be provided', 'invalid_request');
+    }
+
+    if (patch.removeImage && post.imageKey) {
+      await deleteObject(post.imageKey).catch(() => {});
+    }
+
+    const updated = await this.repo.updatePost(postId, patch);
+    if (!updated) {
+      throw new NotFoundError('Post not found', 'post_not_found');
+    }
+
+    await this.publisher.publishPostEdited({
+      postId: postId.toString(),
+      authorId: viewerId,
+      body: updated.body,
+      hasImage: Boolean(updated.imageKey),
+      at: (updated.updatedAt || new Date()).toISOString(),
+    });
+
+    const liked = await this.likeRepo.findLike(postId, viewerId);
+    const authorProfile = await this.getProfilesCol().findOne({ userId: post.authorId });
+    const commentsPreview = await this.commentService.getRecentPreview(postId, viewerId, 3);
+
+    return {
+      id: updated._id.toString(),
+      body: updated.body,
+      imageKey: updated.imageKey ?? null,
+      imageUrl: updated.imageUrl ?? null,
+      likeCount: updated.likeCount ?? 0,
+      commentCount: updated.commentCount ?? 0,
+      likedByViewer: !!liked,
+      comments: commentsPreview,
+      createdAt: updated.createdAt instanceof Date ? updated.createdAt.toISOString() : new Date(updated.createdAt).toISOString(),
+      updatedAt: updated.updatedAt instanceof Date ? updated.updatedAt.toISOString() : new Date(updated.updatedAt).toISOString(),
+      author: {
+        userId: post.authorId,
+        username: authorProfile?.username || 'unknown',
+        name: authorProfile?.name ?? null,
+        avatarUrl: authorProfile ? computePublicUrl(authorProfile.avatarKey, authorProfile.updatedAt) : null,
+      },
+    };
+  }
+
+  async getPopular(viewerId: string, limit: number = 20): Promise<PostResponse[]> {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const candidatePosts = await this.repo.getPopularPosts(sevenDaysAgo, limit * 3);
+    if (candidatePosts.length === 0) return [];
+
+    const authorIds = Array.from(new Set(candidatePosts.map((p) => p.authorId)));
+    const blockedIds = await getBlockedUserIds(viewerId, authorIds, this.customDb);
+    const allowedPosts = candidatePosts
+      .filter((p) => !blockedIds.has(p.authorId))
+      .slice(0, limit);
+
+    if (allowedPosts.length === 0) return [];
+
+    const postIds = allowedPosts.map((p) => p._id);
+    const likedSet = await this.likeRepo.hasLikedBatch(viewerId, postIds);
+
+    const allowedAuthorIds = Array.from(new Set(allowedPosts.map((p) => p.authorId)));
+    const profiles = await this.getProfilesCol()
+      .find({ userId: { $in: allowedAuthorIds } })
+      .toArray();
+
+    const profileMap = new Map<string, ProfileDocument>();
+    for (const p of profiles) {
+      profileMap.set(p.userId, p);
+    }
+
+    const commentsMap = await this.commentService.getBatchRecentPreview(postIds, viewerId, 3);
+
+    return allowedPosts.map((p) => {
+      const authorProfile = profileMap.get(p.authorId);
+      return {
+        id: p._id.toString(),
+        body: p.body,
+        imageKey: p.imageKey ?? null,
+        imageUrl: p.imageUrl ?? null,
+        likeCount: p.likeCount ?? 0,
+        commentCount: p.commentCount ?? 0,
+        likedByViewer: likedSet.has(p._id.toString()),
+        comments: commentsMap.get(p._id.toString()) || [],
+        createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : new Date(p.createdAt).toISOString(),
+        updatedAt: p.updatedAt instanceof Date ? p.updatedAt.toISOString() : new Date(p.updatedAt).toISOString(),
+        author: {
+          userId: p.authorId,
+          username: authorProfile?.username || 'unknown',
+          name: authorProfile?.name ?? null,
+          avatarUrl: authorProfile ? computePublicUrl(authorProfile.avatarKey, authorProfile.updatedAt) : null,
+        },
+      };
+    });
+  }
+
+  async getViewerLikedPosts(
+    viewerId: string,
+    limit: number = 20,
+    before?: string
+  ): Promise<PostResponse[]> {
+    const beforeDate = before ? new Date(before) : undefined;
+    const likes = await this.likeRepo.getUserLikes(viewerId, limit * 3, beforeDate);
+    if (likes.length === 0) return [];
+
+    const postIds = likes.map((l) => l.postId);
+    const posts = await this.repo.getPostsByIds(postIds);
+    if (posts.length === 0) return [];
+
+    const postMap = new Map<string, typeof posts[0]>();
+    for (const p of posts) {
+      postMap.set(p._id.toString(), p);
+    }
+
+    const orderedPosts: typeof posts = [];
+    for (const l of likes) {
+      const post = postMap.get(l.postId.toString());
+      if (post) {
+        orderedPosts.push(post);
+      }
+    }
+
+    const authorIds = Array.from(new Set(orderedPosts.map((p) => p.authorId)));
+    const blockedIds = await getBlockedUserIds(viewerId, authorIds, this.customDb);
+    const allowedPosts = orderedPosts
+      .filter((p) => !blockedIds.has(p.authorId))
+      .slice(0, limit);
+
+    if (allowedPosts.length === 0) return [];
+
+    const allowedPostIds = allowedPosts.map((p) => p._id);
+    const allowedAuthorIds = Array.from(new Set(allowedPosts.map((p) => p.authorId)));
+    const profiles = await this.getProfilesCol()
+      .find({ userId: { $in: allowedAuthorIds } })
+      .toArray();
+
+    const profileMap = new Map<string, ProfileDocument>();
+    for (const p of profiles) {
+      profileMap.set(p.userId, p);
+    }
+
+    const commentsMap = await this.commentService.getBatchRecentPreview(allowedPostIds, viewerId, 3);
+
+    return allowedPosts.map((p) => {
+      const authorProfile = profileMap.get(p.authorId);
+      return {
+        id: p._id.toString(),
+        body: p.body,
+        imageKey: p.imageKey ?? null,
+        imageUrl: p.imageUrl ?? null,
+        likeCount: p.likeCount ?? 0,
+        commentCount: p.commentCount ?? 0,
+        likedByViewer: true,
+        comments: commentsMap.get(p._id.toString()) || [],
+        createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : new Date(p.createdAt).toISOString(),
+        updatedAt: p.updatedAt instanceof Date ? p.updatedAt.toISOString() : new Date(p.updatedAt).toISOString(),
+        author: {
+          userId: p.authorId,
+          username: authorProfile?.username || 'unknown',
+          name: authorProfile?.name ?? null,
+          avatarUrl: authorProfile ? computePublicUrl(authorProfile.avatarKey, authorProfile.updatedAt) : null,
+        },
+      };
+    });
   }
 }
 

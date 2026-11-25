@@ -111,6 +111,53 @@ export class PostRepository {
       .limit(limit)
       .toArray();
   }
+
+  async updatePost(
+    postId: ObjectId,
+    fields: { body?: string; removeImage?: boolean }
+  ): Promise<PostDocument | null> {
+    const $set: Record<string, unknown> = {
+      updatedAt: new Date(),
+    };
+    if (fields.body !== undefined) {
+      $set.body = fields.body;
+    }
+    if (fields.removeImage) {
+      $set.imageKey = null;
+      $set.imageUrl = null;
+    }
+
+    const res = await this.getCollection().findOneAndUpdate(
+      { _id: postId, deleted: false },
+      { $set },
+      { returnDocument: 'after' }
+    );
+    return res;
+  }
+
+  async getPopularPosts(
+    since: Date,
+    limit: number
+  ): Promise<PostDocument[]> {
+    return this.getCollection()
+      .find({
+        deleted: false,
+        createdAt: { $gte: since },
+      })
+      .sort({ likeCount: -1, createdAt: -1 })
+      .limit(limit)
+      .toArray();
+  }
+
+  async getPostsByIds(postIds: ObjectId[]): Promise<PostDocument[]> {
+    if (postIds.length === 0) return [];
+    return this.getCollection()
+      .find({
+        _id: { $in: postIds },
+        deleted: false,
+      })
+      .toArray();
+  }
 }
 
 export const defaultPostRepository = new PostRepository();

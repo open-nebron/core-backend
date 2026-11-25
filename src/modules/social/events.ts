@@ -15,6 +15,14 @@ export interface PostDeletedPayload {
   at: string;
 }
 
+export interface PostEditedPayload {
+  postId: string;
+  authorId: string;
+  body: string;
+  hasImage: boolean;
+  at: string;
+}
+
 export interface PostLikedPayload {
   postId: string;
   authorId: string;
@@ -87,6 +95,10 @@ export class SocialEventPublisher {
 
   async publishPostDeleted(payload: PostDeletedPayload): Promise<void> {
     await this.publish('core.post.deleted', payload);
+  }
+
+  async publishPostEdited(payload: PostEditedPayload): Promise<void> {
+    await this.publish('core.post.edited', payload);
   }
 
   async publishPostLiked(payload: PostLikedPayload): Promise<void> {

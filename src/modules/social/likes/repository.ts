@@ -93,6 +93,22 @@ export class PostLikeRepository {
       .limit(limit)
       .toArray();
   }
+
+  async getUserLikes(
+    userId: string,
+    limit: number,
+    before?: Date
+  ): Promise<PostLikeDocument[]> {
+    const filter: Record<string, unknown> = { userId };
+    if (before) {
+      filter.createdAt = { $lt: before };
+    }
+    return this.getCollection()
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .toArray();
+  }
 }
 
 export const defaultPostLikeRepository = new PostLikeRepository();
