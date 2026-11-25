@@ -6,6 +6,7 @@ import {
   suggestionsQuerySchema,
 } from '../validate.js';
 import { defaultFollowService } from './service.js';
+import { capture } from '../../../lib/analytics.js';
 
 interface UserIdParams {
   userId: string;
@@ -71,6 +72,7 @@ export const followRoutes: FastifyPluginAsync = async (app: FastifyInstance) => 
       const targetUserId = request.params.userId;
 
       await defaultFollowService.followUser(viewerId, targetUserId);
+      capture(viewerId, 'user_followed', { targetUserId });
       return reply.status(204).send();
     }
   );
@@ -104,6 +106,7 @@ export const followRoutes: FastifyPluginAsync = async (app: FastifyInstance) => 
       const targetUserId = request.params.userId;
 
       await defaultFollowService.unfollowUser(viewerId, targetUserId);
+      capture(viewerId, 'user_unfollowed', { targetUserId });
       return reply.status(204).send();
     }
   );

@@ -8,6 +8,7 @@ import {
   postIdParamSchema,
 } from '../validate.js';
 import { defaultCommentService } from './service.js';
+import { capture } from '../../../lib/analytics.js';
 
 interface CreateCommentBody {
   body: string;
@@ -86,6 +87,7 @@ export const commentRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
         parsedParams.id,
         parsedBody.body
       );
+      capture(viewerId, 'comment_created', { postId: parsedParams.id, commentId: comment.id });
       return reply.status(201).send(comment);
     }
   );

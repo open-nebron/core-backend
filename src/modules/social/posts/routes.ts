@@ -30,6 +30,7 @@ import {
 } from '../validate.js';
 import { defaultPostService } from './service.js';
 import { defaultPostLikeService } from '../likes/service.js';
+import { capture } from '../../../lib/analytics.js';
 
 interface CreatePostBody {
   body: string;
@@ -297,6 +298,7 @@ export const postRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         parsedBody.body,
         parsedBody.imageKey
       );
+      capture(viewerId, 'post_created', { postId: post.id, hasImage: Boolean(parsedBody.imageKey) });
       return reply.status(201).send(post);
     }
   );
@@ -426,6 +428,7 @@ export const postRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const viewerId = request.user.userId;
       postIdParamSchema.parse(request.params);
       await defaultPostLikeService.likePost(viewerId, request.params.id);
+      capture(viewerId, 'post_liked', { postId: request.params.id });
       return reply.status(204).send();
     }
   );

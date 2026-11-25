@@ -32,6 +32,7 @@ import {
   isValidUserKey,
 } from '../../lib/r2.js';
 import { env, getSupportedLanguages } from '../../config/env.js';
+import { capture } from '../../lib/analytics.js';
 
 export const profileRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // GET /meta - Public configuration and limits metadata
@@ -183,6 +184,7 @@ export const profileRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
       const { userId } = request.user;
 
       const updated = await profileService.updateProfile(userId, parsedBody);
+      capture(userId, 'profile_updated');
       return reply.status(200).send(formatProfileResponse(updated));
     }
   );
@@ -338,6 +340,7 @@ export const profileRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
       }
 
       const updated = await profileService.updateMediaKey(userId, 'avatar', objectKey);
+      capture(userId, 'avatar_uploaded');
       return reply.status(200).send({
         key: objectKey,
         url: computePublicUrl(objectKey, updated.updatedAt),
@@ -447,6 +450,7 @@ export const profileRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
       }
 
       const updated = await profileService.updateMediaKey(userId, 'banner', objectKey);
+      capture(userId, 'banner_uploaded');
       return reply.status(200).send({
         key: objectKey,
         url: computePublicUrl(objectKey, updated.updatedAt),
