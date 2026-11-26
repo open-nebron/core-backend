@@ -65,6 +65,19 @@ export interface UserUnfollowedPayload {
   at: string;
 }
 
+export interface StoryCreatedPayload {
+  storyId: string;
+  authorId: string;
+  mediaType: 'image' | 'video';
+  at: string;
+}
+
+export interface StoryDeletedPayload {
+  storyId: string;
+  authorId: string;
+  at: string;
+}
+
 export class SocialEventPublisher {
   private redis: Redis;
   private readonly streamKey: string;
@@ -123,6 +136,34 @@ export class SocialEventPublisher {
 
   async publishUserUnfollowed(payload: UserUnfollowedPayload): Promise<void> {
     await this.publish('core.user.unfollowed', payload);
+  }
+
+  async publishStoryCreated(payload: StoryCreatedPayload): Promise<void> {
+    await this.publish('core.story.created', payload);
+  }
+
+  async publishStoryDeleted(payload: StoryDeletedPayload): Promise<void> {
+    await this.publish('core.story.deleted', payload);
+  }
+
+  async publishWsToUsers(userIds: string[], type: string, payload: unknown): Promise<void> {
+    if (!userIds || userIds.length === 0) return;
+    try {
+      const msg = JSON.stringify({ type, payload });
+      if (typeof (this.redis as any)?.pipeline === 'function') {
+        const pipe = this.redis.pipeline();
+        for (const uid of userIds) {
+          pipe.publish(`ws:user:${uid}`, msg);
+        }
+        await pipe.exec();
+      } else if (typeof (this.redis as any)?.publish === 'function') {
+        for (const uid of userIds) {
+          await this.redis.publish(`ws:user:${uid}`, msg);
+        }
+      }
+    } catch (err: unknown) {
+      console.error(`Failed to publish WS event ${type}:`, err);
+    }
   }
 }
 

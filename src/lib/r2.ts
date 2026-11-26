@@ -9,15 +9,22 @@ import {
 import { createPresignedPost, type PresignedPost } from '@aws-sdk/s3-presigned-post';
 import { env } from '../config/env.js';
 
-export type MediaKind = 'avatar' | 'banner' | 'post';
+export type MediaKind = 'avatar' | 'banner' | 'post' | 'story';
 
 export const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export type AcceptedImageType = (typeof ACCEPTED_IMAGE_TYPES)[number];
 
-const MIME_TO_EXTENSION: Record<AcceptedImageType, string> = {
+export const ACCEPTED_VIDEO_TYPES = ['video/mp4'] as const;
+export type AcceptedVideoType = (typeof ACCEPTED_VIDEO_TYPES)[number];
+
+export const ACCEPTED_STORY_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'video/mp4'] as const;
+export type AcceptedStoryMediaType = (typeof ACCEPTED_STORY_MEDIA_TYPES)[number];
+
+const MIME_TO_EXTENSION: Record<AcceptedStoryMediaType, string> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
+  'video/mp4': 'mp4',
 };
 
 let s3ClientInstance: S3Client | null = null;
@@ -43,11 +50,14 @@ export function getS3Client(): S3Client {
   return s3ClientInstance;
 }
 
-export function generateObjectKey(userId: string, kind: MediaKind, contentType: AcceptedImageType): string {
+export function generateObjectKey(userId: string, kind: MediaKind, contentType: AcceptedStoryMediaType): string {
   const ext = MIME_TO_EXTENSION[contentType] || 'jpg';
   const uuid = crypto.randomUUID();
   if (kind === 'post') {
     return `posts/${userId}/${uuid}.${ext}`;
+  }
+  if (kind === 'story') {
+    return `stories/${userId}/${uuid}.${ext}`;
   }
   return `users/${userId}/${kind}/${uuid}.${ext}`;
 }
@@ -55,6 +65,9 @@ export function generateObjectKey(userId: string, kind: MediaKind, contentType: 
 export function isValidUserKey(userId: string, kind: MediaKind, objectKey: string): boolean {
   if (kind === 'post') {
     return objectKey.startsWith(`posts/${userId}/`);
+  }
+  if (kind === 'story') {
+    return objectKey.startsWith(`stories/${userId}/`);
   }
   const expectedPrefix = `users/${userId}/${kind}/`;
   return objectKey.startsWith(expectedPrefix);
@@ -74,7 +87,7 @@ export interface PresignedUploadSlot {
 export async function createPresignedUpload(
   userId: string,
   kind: MediaKind,
-  contentType: AcceptedImageType,
+  contentType: AcceptedStoryMediaType,
   contentLength: number
 ): Promise<PresignedUploadSlot> {
   const s3 = getS3Client();
@@ -83,6 +96,10 @@ export async function createPresignedUpload(
       ? env.MAX_AVATAR_BYTES
       : kind === 'banner'
       ? env.MAX_BANNER_BYTES
+      : kind === 'story'
+      ? contentType === 'video/mp4'
+        ? env.MAX_STORY_VIDEO_BYTES
+        : env.MAX_STORY_IMAGE_BYTES
       : env.MAX_POST_IMAGE_BYTES;
 
   const objectKey = generateObjectKey(userId, kind, contentType);

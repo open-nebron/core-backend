@@ -127,6 +127,27 @@ export interface AdminActionDocument {
   createdAt: Date;
 }
 
+export interface StoryViewerEntry {
+  userId: string;
+  viewedAt: Date;
+}
+
+export interface StoryDocument {
+  _id?: any;
+  authorId: string;
+  mediaType: 'image' | 'video';
+  mediaKey: string;
+  mediaUrl: string;
+  thumbnailKey: string | null;
+  duration: number;
+  caption: string | null;
+  viewers: StoryViewerEntry[];
+  viewerCount?: number;
+  authorViewed?: boolean;
+  expiresAt: Date;
+  createdAt: Date;
+}
+
 let client: MongoClient | null = null;
 let db: Db | null = null;
 
@@ -192,6 +213,10 @@ export async function initMongoIndexes(database: Db): Promise<void> {
   await adminActions.createIndex({ adminId: 1, createdAt: -1 }, { name: 'idx_admin_actions_adminId_createdAt' });
   await adminActions.createIndex({ targetType: 1, targetId: 1 }, { name: 'idx_admin_actions_target' });
 
+  const stories = database.collection<StoryDocument>('stories');
+  await stories.createIndex({ authorId: 1, expiresAt: -1 }, { name: 'idx_stories_authorId_expiresAt' });
+  await stories.createIndex({ expiresAt: 1 }, { name: 'idx_stories_expiresAt' });
+
   // Migration: rename any legacy profilePicUrl field
   try {
     await profiles.updateMany(
@@ -252,6 +277,10 @@ export function getReportsCollection(dbInstance?: Db): Collection<ReportDocument
 
 export function getAdminActionsCollection(dbInstance?: Db): Collection<AdminActionDocument> {
   return (dbInstance ?? getDb()).collection<AdminActionDocument>('admin_actions');
+}
+
+export function getStoriesCollection(dbInstance?: Db): Collection<StoryDocument> {
+  return (dbInstance ?? getDb()).collection<StoryDocument>('stories');
 }
 
 export async function runInTransaction<T>(

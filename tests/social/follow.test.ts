@@ -329,4 +329,57 @@ describe('Social - Follow Module', () => {
     expect(all.map((u: any) => u.userId)).toContain(userB);
     expect(all.map((u: any) => u.userId)).toContain(userC);
   });
+
+  // 9. ObjectId (24-hex) userId support (auth-service format)
+  it('Supports 24-hex ObjectId userId format from auth-service', async () => {
+    const objIdA = '6b07c672dba0bcd5dac8e881';
+    const objIdB = '6b07c672dba0bcd5dac8e882';
+    const tokenObjA = await createMockAccessToken({ sub: objIdA, email: 'obja@nebron.io' });
+    const now = new Date();
+
+    await db.collection('profiles').insertMany([
+      {
+        userId: objIdA,
+        username: 'obj_alice',
+        name: 'Obj Alice',
+        language: 'en',
+        theme: 'dark',
+        avatarKey: null,
+        bannerKey: null,
+        followerCount: 0,
+        followingCount: 0,
+        postCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        userId: objIdB,
+        username: 'obj_bob',
+        name: 'Obj Bob',
+        language: 'en',
+        theme: 'light',
+        avatarKey: null,
+        bannerKey: null,
+        followerCount: 0,
+        followingCount: 0,
+        postCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]);
+
+    const resFollow = await app.inject({
+      method: 'POST',
+      url: `/users/${objIdB}/follow`,
+      headers: { authorization: `Bearer ${tokenObjA}` },
+    });
+    expect(resFollow.statusCode).toBe(204);
+
+    const resPosts = await app.inject({
+      method: 'GET',
+      url: `/users/${objIdB}/posts`,
+      headers: { authorization: `Bearer ${tokenObjA}` },
+    });
+    expect(resPosts.statusCode).toBe(200);
+  });
 });

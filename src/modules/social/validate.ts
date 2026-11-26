@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidUserId } from '../relationships/validate.js';
 
 const CONTROL_CHARS_ALLOW_LINEBREAKS = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
 
@@ -20,7 +21,9 @@ export const createPostSchema = z.object({
 });
 
 export const userIdParamSchema = z.object({
-  userId: z.string().uuid('Invalid user ID format'),
+  userId: z.string().refine((val) => isValidUserId(val), {
+    message: 'Invalid user ID format',
+  }),
 });
 
 export const postIdParamSchema = z.object({

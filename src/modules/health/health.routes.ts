@@ -4,6 +4,7 @@ import { isRedisHealthy } from '../../db/redis.js';
 import { jwksService } from '../../auth/jwks.js';
 import { env } from '../../config/env.js';
 import { cleanupOrphanedMedia } from '../../jobs/cleanup-orphans.js';
+import { cleanupExpiredStories } from '../../jobs/story-cleanup.js';
 import { UnauthorizedError } from '../../utils/errors.js';
 
 export const healthRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
@@ -119,6 +120,39 @@ export const healthRoutes: FastifyPluginAsync = async (app: FastifyInstance) => 
       }
 
       const result = await cleanupOrphanedMedia();
+      return reply.status(200).send({
+        status: 'ok',
+        ...result,
+      });
+    }
+  );
+
+  // Internal endpoint for cron-based expired story cleanup
+  app.post(
+    '/internal/cleanup-stories',
+    {
+      schema: {
+        description: 'Trigger cleanup of expired stories and their R2 objects',
+        tags: ['Internal'],
+        headers: {
+          type: 'object',
+          properties: {
+            'x-internal-token': { type: 'string' },
+            authorization: { type: 'string' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const tokenHeader =
+        (request.headers['x-internal-token'] as string) ||
+        (request.headers.authorization?.replace(/^Bearer\s+/i, '') as string);
+
+      if (!tokenHeader || tokenHeader !== env.INTERNAL_TOKEN) {
+        throw new UnauthorizedError('Invalid or missing internal authorization token');
+      }
+
+      const result = await cleanupExpiredStories();
       return reply.status(200).send({
         status: 'ok',
         ...result,

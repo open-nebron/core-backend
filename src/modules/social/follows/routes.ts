@@ -54,7 +54,7 @@ export const followRoutes: FastifyPluginAsync = async (app: FastifyInstance) => 
         params: {
           type: 'object',
           properties: {
-            userId: { type: 'string', format: 'uuid' },
+            userId: { type: 'string', minLength: 1 },
           },
           required: ['userId'],
         },
@@ -88,7 +88,7 @@ export const followRoutes: FastifyPluginAsync = async (app: FastifyInstance) => 
         params: {
           type: 'object',
           properties: {
-            userId: { type: 'string', format: 'uuid' },
+            userId: { type: 'string', minLength: 1 },
           },
           required: ['userId'],
         },
@@ -122,7 +122,7 @@ export const followRoutes: FastifyPluginAsync = async (app: FastifyInstance) => 
         params: {
           type: 'object',
           properties: {
-            userId: { type: 'string', format: 'uuid' },
+            userId: { type: 'string', minLength: 1 },
           },
           required: ['userId'],
         },
@@ -166,7 +166,7 @@ export const followRoutes: FastifyPluginAsync = async (app: FastifyInstance) => 
         params: {
           type: 'object',
           properties: {
-            userId: { type: 'string', format: 'uuid' },
+            userId: { type: 'string', minLength: 1 },
           },
           required: ['userId'],
         },
