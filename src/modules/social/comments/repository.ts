@@ -3,8 +3,10 @@ import {
   getDb,
   getCommentsCollection,
   getPostsCollection,
+  getReelsCollection,
   type CommentDocument,
   type PostDocument,
+  type ReelDocument,
 } from '../../../db/mongo.js';
 
 export class CommentRepository {
@@ -20,6 +22,10 @@ export class CommentRepository {
 
   private getPostsCol(): Collection<PostDocument> {
     return getPostsCollection(this.customDb ?? getDb());
+  }
+
+  private getReelsCol(): Collection<ReelDocument> {
+    return getReelsCollection(this.customDb ?? getDb());
   }
 
   async createComment(
@@ -71,6 +77,48 @@ export class CommentRepository {
     );
   }
 
+  async incrementReelCommentCount(
+    reelId: ObjectId,
+    session?: ClientSession
+  ): Promise<void> {
+    await this.getReelsCol().updateOne(
+      { _id: reelId },
+      { $inc: { commentCount: 1 } },
+      { session }
+    );
+  }
+
+  async decrementReelCommentCount(
+    reelId: ObjectId,
+    session?: ClientSession
+  ): Promise<void> {
+    await this.getReelsCol().updateOne(
+      { _id: reelId, commentCount: { $gt: 0 } },
+      { $inc: { commentCount: -1 } },
+      { session }
+    );
+  }
+
+  async getCommentsByReel(
+    reelId: ObjectId,
+    limit: number = 30,
+    before?: Date
+  ): Promise<CommentDocument[]> {
+    const filter: Record<string, unknown> = {
+      reelId,
+      deleted: false,
+    };
+    if (before) {
+      filter.createdAt = { $lt: before };
+    }
+
+    return this.getCollection()
+      .find(filter)
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .toArray();
+  }
+
   async getCommentsByPost(
     postId: ObjectId,
     limit: number = 30,
@@ -116,6 +164,7 @@ export class CommentRepository {
       .toArray();
 
     for (const doc of docs) {
+      if (!doc.postId) continue;
       const pid = doc.postId.toString();
       const existing = result.get(pid) || [];
       if (existing.length < limitPerPost) {

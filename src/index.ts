@@ -5,6 +5,7 @@ import { jwksService } from './auth/jwks.js';
 import { eventConsumer } from './modules/events/consumer.js';
 import { buildApp } from './app.js';
 import { startStoryCleanupScheduler, stopStoryCleanupScheduler } from './jobs/story-cleanup.js';
+import { startReelJobsScheduler, stopReelJobsScheduler } from './jobs/reel-jobs.js';
 
 async function bootstrap() {
   console.log('[CoreAPI] Starting Nebron Core API...');
@@ -55,6 +56,7 @@ async function bootstrap() {
   try {
     await app.listen({ port: env.PORT, host: '0.0.0.0' });
     startStoryCleanupScheduler();
+    startReelJobsScheduler();
     console.log(`[CoreAPI] Listening on http://0.0.0.0:${env.PORT}`);
     console.log(`[CoreAPI] OpenAPI Documentation available at http://0.0.0.0:${env.PORT}/docs`);
   } catch (err) {
@@ -69,6 +71,7 @@ async function bootstrap() {
       console.log(`\n[CoreAPI] Received ${signal}, shutting down gracefully...`);
       try {
         stopStoryCleanupScheduler();
+        stopReelJobsScheduler();
         await app.close();
         await eventConsumer.stop();
         jwksService.stopBackgroundRefresh();

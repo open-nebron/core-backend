@@ -159,4 +159,72 @@ export const healthRoutes: FastifyPluginAsync = async (app: FastifyInstance) => 
       });
     }
   );
+
+  // Internal endpoint to flush buffered reel view counts from Redis to MongoDB
+  app.post(
+    '/internal/flush-reel-views',
+    {
+      schema: {
+        description: 'Flush buffered reel views from Redis to MongoDB',
+        tags: ['Internal'],
+        headers: {
+          type: 'object',
+          properties: {
+            'x-internal-token': { type: 'string' },
+            authorization: { type: 'string' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const tokenHeader =
+        (request.headers['x-internal-token'] as string) ||
+        (request.headers.authorization?.replace(/^Bearer\s+/i, '') as string);
+
+      if (!tokenHeader || tokenHeader !== env.INTERNAL_TOKEN) {
+        throw new UnauthorizedError('Invalid or missing internal authorization token');
+      }
+
+      const { flushBufferedReelViews } = await import('../../jobs/reel-jobs.js');
+      const result = await flushBufferedReelViews();
+      return reply.status(200).send({
+        status: 'ok',
+        ...result,
+      });
+    }
+  );
+
+  // Internal endpoint to clean up R2 objects for soft-deleted reels
+  app.post(
+    '/internal/cleanup-reels',
+    {
+      schema: {
+        description: 'Delete R2 assets for soft-deleted reels',
+        tags: ['Internal'],
+        headers: {
+          type: 'object',
+          properties: {
+            'x-internal-token': { type: 'string' },
+            authorization: { type: 'string' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const tokenHeader =
+        (request.headers['x-internal-token'] as string) ||
+        (request.headers.authorization?.replace(/^Bearer\s+/i, '') as string);
+
+      if (!tokenHeader || tokenHeader !== env.INTERNAL_TOKEN) {
+        throw new UnauthorizedError('Invalid or missing internal authorization token');
+      }
+
+      const { cleanupDeletedReels } = await import('../../jobs/reel-jobs.js');
+      const result = await cleanupDeletedReels();
+      return reply.status(200).send({
+        status: 'ok',
+        ...result,
+      });
+    }
+  );
 };

@@ -78,6 +78,34 @@ export interface StoryDeletedPayload {
   at: string;
 }
 
+export interface ReelCreatedPayload {
+  reelId: string;
+  authorId: string;
+  duration: number;
+  at: string;
+}
+
+export interface ReelLikedPayload {
+  reelId: string;
+  authorId: string;
+  userId: string;
+  at: string;
+}
+
+export interface ReelUnlikedPayload {
+  reelId: string;
+  authorId: string;
+  userId: string;
+  at: string;
+}
+
+export interface ReelViewedPayload {
+  reelId: string;
+  viewDelta: number;
+  totalViews: number;
+  at: string;
+}
+
 export class SocialEventPublisher {
   private redis: Redis;
   private readonly streamKey: string;
@@ -144,6 +172,22 @@ export class SocialEventPublisher {
 
   async publishStoryDeleted(payload: StoryDeletedPayload): Promise<void> {
     await this.publish('core.story.deleted', payload);
+  }
+
+  async publishReelCreated(payload: ReelCreatedPayload): Promise<void> {
+    await this.publish('core.reel.created', payload);
+  }
+
+  async publishReelLiked(payload: ReelLikedPayload): Promise<void> {
+    await this.publish('core.reel.liked', payload);
+  }
+
+  async publishReelUnliked(payload: ReelUnlikedPayload): Promise<void> {
+    await this.publish('core.reel.unliked', payload);
+  }
+
+  async publishReelViewed(payload: ReelViewedPayload): Promise<void> {
+    await this.publish('core.reel.viewed', payload);
   }
 
   async publishWsToUsers(userIds: string[], type: string, payload: unknown): Promise<void> {

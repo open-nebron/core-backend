@@ -385,3 +385,15 @@ git intentionally — it makes Docker builds hermetic.
 
 Future: migrate to GitHub Packages or a private npm registry once
 the org has one.
+
+### Admin Assignment (V3)
+For v3, admin privileges (`isAdmin: true`) are granted manually via the MongoDB shell:
+```javascript
+db.profiles.updateOne({ username: "your_admin_username" }, { $set: { isAdmin: true } })
+```
+The first admin in the database acts as the super-admin authorized to promote/demote other admins. Self-serve admin assignment UI is planned for v4.
+
+### Reels Video Storage & Duration Validation
+Reels — future: move to Mux for adaptive bitrate.
+
+For MVP (`DECISION_REELS_INFRA=r2-raw`), reels store raw MP4 uploads directly in R2 (`reels/{userId}/{uuid}.mp4`) capped at 50 MB and validate duration (5-60 seconds) from client-reported metadata at upload confirmation (`POST /reels/confirm`). Trusting client-supplied duration avoids server-side ffprobe transcoding in v3; a determined client could report a forged duration while staying under the 50 MB R2 size policy.

@@ -13,6 +13,7 @@ import { commentRoutes } from './modules/social/comments/routes.js';
 import { userRoutes } from './modules/users/user.routes.js';
 import { reportRoutes } from './modules/reports/reports.routes.js';
 import { storyRoutes } from './modules/stories/stories.routes.js';
+import { reelRoutes } from './modules/reels/reels.routes.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
   const isDev = env.NODE_ENV === 'development';
@@ -84,6 +85,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(userRoutes);
   await app.register(reportRoutes);
   await app.register(storyRoutes);
+  await app.register(reelRoutes);
 
   return app;
 }

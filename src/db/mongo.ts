@@ -67,7 +67,9 @@ export interface PostLikeDocument {
 
 export interface CommentDocument {
   _id?: any;
-  postId: any;
+  targetType?: 'post' | 'reel';
+  postId?: any;
+  reelId?: any;
   authorId: string;
   body: string;
   deleted: boolean;
@@ -148,6 +150,32 @@ export interface StoryDocument {
   createdAt: Date;
 }
 
+export interface ReelDocument {
+  _id?: any;
+  authorId: string;
+  caption: string | null;
+  videoKey: string;
+  videoUrl: string;
+  thumbnailKey: string | null;
+  thumbnailUrl: string | null;
+  duration: number;
+  viewCount: number;
+  likeCount: number;
+  commentCount: number;
+  deleted: boolean;
+  deletedAt?: Date | null;
+  r2DeletedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ReelLikeDocument {
+  _id?: any;
+  reelId: any;
+  userId: string;
+  createdAt: Date;
+}
+
 let client: MongoClient | null = null;
 let db: Db | null = null;
 
@@ -198,6 +226,7 @@ export async function initMongoIndexes(database: Db): Promise<void> {
 
   const comments = database.collection<CommentDocument>('comments');
   await comments.createIndex({ postId: 1, createdAt: 1 }, { name: 'idx_comments_postId_createdAt' });
+  await comments.createIndex({ reelId: 1, createdAt: 1 }, { sparse: true, name: 'idx_comments_reelId_createdAt' });
   await comments.createIndex({ authorId: 1 }, { name: 'idx_comments_authorId' });
 
   const follows = database.collection<FollowDocument>('follows');
@@ -216,6 +245,15 @@ export async function initMongoIndexes(database: Db): Promise<void> {
   const stories = database.collection<StoryDocument>('stories');
   await stories.createIndex({ authorId: 1, expiresAt: -1 }, { name: 'idx_stories_authorId_expiresAt' });
   await stories.createIndex({ expiresAt: 1 }, { name: 'idx_stories_expiresAt' });
+
+  const reels = database.collection<ReelDocument>('reels');
+  await reels.createIndex({ authorId: 1, deleted: 1, createdAt: -1 }, { name: 'idx_reels_authorId_deleted_createdAt' });
+  await reels.createIndex({ deleted: 1, createdAt: -1 }, { name: 'idx_reels_deleted_createdAt' });
+  await reels.createIndex({ deleted: 1, r2DeletedAt: 1 }, { name: 'idx_reels_deleted_r2DeletedAt' });
+
+  const reelLikes = database.collection<ReelLikeDocument>('reel_likes');
+  await reelLikes.createIndex({ reelId: 1, userId: 1 }, { unique: true, name: 'idx_reel_likes_reelId_userId_unique' });
+  await reelLikes.createIndex({ userId: 1 }, { name: 'idx_reel_likes_userId' });
 
   // Migration: rename any legacy profilePicUrl field
   try {
@@ -281,6 +319,14 @@ export function getAdminActionsCollection(dbInstance?: Db): Collection<AdminActi
 
 export function getStoriesCollection(dbInstance?: Db): Collection<StoryDocument> {
   return (dbInstance ?? getDb()).collection<StoryDocument>('stories');
+}
+
+export function getReelsCollection(dbInstance?: Db): Collection<ReelDocument> {
+  return (dbInstance ?? getDb()).collection<ReelDocument>('reels');
+}
+
+export function getReelLikesCollection(dbInstance?: Db): Collection<ReelLikeDocument> {
+  return (dbInstance ?? getDb()).collection<ReelLikeDocument>('reel_likes');
 }
 
 export async function runInTransaction<T>(

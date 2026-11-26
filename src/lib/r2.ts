@@ -9,7 +9,7 @@ import {
 import { createPresignedPost, type PresignedPost } from '@aws-sdk/s3-presigned-post';
 import { env } from '../config/env.js';
 
-export type MediaKind = 'avatar' | 'banner' | 'post' | 'story';
+export type MediaKind = 'avatar' | 'banner' | 'post' | 'story' | 'reel';
 
 export const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export type AcceptedImageType = (typeof ACCEPTED_IMAGE_TYPES)[number];
@@ -59,6 +59,9 @@ export function generateObjectKey(userId: string, kind: MediaKind, contentType: 
   if (kind === 'story') {
     return `stories/${userId}/${uuid}.${ext}`;
   }
+  if (kind === 'reel') {
+    return `reels/${userId}/${uuid}.${ext}`;
+  }
   return `users/${userId}/${kind}/${uuid}.${ext}`;
 }
 
@@ -68,6 +71,9 @@ export function isValidUserKey(userId: string, kind: MediaKind, objectKey: strin
   }
   if (kind === 'story') {
     return objectKey.startsWith(`stories/${userId}/`);
+  }
+  if (kind === 'reel') {
+    return objectKey.startsWith(`reels/${userId}/`);
   }
   const expectedPrefix = `users/${userId}/${kind}/`;
   return objectKey.startsWith(expectedPrefix);
@@ -100,6 +106,10 @@ export async function createPresignedUpload(
       ? contentType === 'video/mp4'
         ? env.MAX_STORY_VIDEO_BYTES
         : env.MAX_STORY_IMAGE_BYTES
+      : kind === 'reel'
+      ? contentType === 'video/mp4'
+        ? env.MAX_REEL_VIDEO_BYTES
+        : env.MAX_REEL_THUMBNAIL_BYTES
       : env.MAX_POST_IMAGE_BYTES;
 
   const objectKey = generateObjectKey(userId, kind, contentType);

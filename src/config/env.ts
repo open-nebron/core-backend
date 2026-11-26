@@ -28,6 +28,8 @@ const envSchema = z
     MAX_POST_IMAGE_BYTES: z.coerce.number().default(10485760), // 10 MB
     MAX_STORY_IMAGE_BYTES: z.coerce.number().default(10485760), // 10 MB
     MAX_STORY_VIDEO_BYTES: z.coerce.number().default(52428800), // 50 MB
+    MAX_REEL_VIDEO_BYTES: z.coerce.number().default(52428800), // 50 MB
+    MAX_REEL_THUMBNAIL_BYTES: z.coerce.number().default(5242880), // 5 MB
 
     // Preferences & Localization
     SUPPORTED_LANGUAGES: z.string().default('en,hi,ta,te,ml,kn,bn,mr,gu,pa,ur'),

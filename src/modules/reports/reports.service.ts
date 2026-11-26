@@ -283,7 +283,9 @@ export class ReportsService {
         if (comment) {
           targetContent = {
             id: comment._id.toString(),
-            postId: comment.postId.toString(),
+            targetType: comment.targetType ?? (comment.reelId ? 'reel' : 'post'),
+            postId: comment.postId?.toString() ?? null,
+            reelId: comment.reelId?.toString() ?? null,
             body: comment.body,
             deleted: comment.deleted,
             createdAt: comment.createdAt,

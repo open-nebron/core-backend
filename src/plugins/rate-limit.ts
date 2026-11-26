@@ -171,3 +171,17 @@ export const createStoryRateLimiter = createRedisRateLimiter({
   keyPrefix: 'ratelimit:stories_create',
   keyGenerator: userKeyGen,
 });
+
+export const reelUploadUrlRateLimiter = createRedisRateLimiter({
+  limit: 20,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:reel_upload_url',
+  keyGenerator: userKeyGen,
+});
+
+export const createReelRateLimiter = createRedisRateLimiter({
+  limit: 10,
+  windowSeconds: 3600,
+  keyPrefix: 'ratelimit:reels_create',
+  keyGenerator: userKeyGen,
+});

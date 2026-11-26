@@ -32,6 +32,7 @@ export async function registerSwagger(app: FastifyInstance): Promise<void> {
         { name: 'Relationships', description: 'Per-user-pair block and mute state management' },
         { name: 'Media', description: 'Avatar and banner media uploads via Cloudflare R2' },
         { name: 'Stories', description: '24h ephemeral stories (images and videos)' },
+        { name: 'Reels', description: 'Short-form vertical video reels feed and interactions' },
         { name: 'Meta', description: 'Public metadata and configuration limits' },
         { name: 'Health', description: 'System health and readiness checks' },
         { name: 'Internal', description: 'Internal operations and maintenance' },
