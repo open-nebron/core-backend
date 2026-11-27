@@ -31,6 +31,7 @@ import { SaveRepository, defaultSaveRepository } from '../social/saves/repositor
 import { getBlockedUserIds, isBlockedPair } from '../social/block-filter.js';
 import { SocialEventPublisher, defaultSocialEventPublisher } from '../social/events.js';
 import { REEL_VIEWS_BUFFER_KEY } from '../../jobs/reel-jobs.js';
+import { defaultSocialSearchService } from '../search/meili.service.js';
 import type { ReelConfirmInput } from './reels.schema.js';
 
 export interface ReelAuthorResponse {
@@ -337,6 +338,14 @@ export class ReelsService {
       duration: input.duration,
       at: now.toISOString(),
     });
+    await defaultSocialSearchService.indexReel({
+      id: res.insertedId.toString(),
+      authorId: userId,
+      caption,
+      createdAt: now,
+      likeCount: 0,
+      viewCount: 0,
+    });
 
     const [enriched] = await this.enrichReels([createdDoc], userId);
     return enriched;
@@ -621,6 +630,7 @@ export class ReelsService {
         },
       }
     );
+    await defaultSocialSearchService.deleteReel(reelIdStr);
   }
 
   async getUserReels(

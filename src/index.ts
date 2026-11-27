@@ -10,6 +10,7 @@ import {
   startAnalyticsRollupScheduler,
   stopAnalyticsRollupScheduler,
 } from './jobs/analytics-rollup.js';
+import { defaultSocialSearchService } from './modules/search/meili.service.js';
 
 async function bootstrap() {
   console.log('[CoreAPI] Starting Nebron Core API...');
@@ -62,6 +63,7 @@ async function bootstrap() {
     startStoryCleanupScheduler();
     startReelJobsScheduler();
     startAnalyticsRollupScheduler();
+    void defaultSocialSearchService.backfillMissing().catch(() => {});
     console.log(`[CoreAPI] Listening on http://0.0.0.0:${env.PORT}`);
     console.log(`[CoreAPI] OpenAPI Documentation available at http://0.0.0.0:${env.PORT}/docs`);
   } catch (err) {

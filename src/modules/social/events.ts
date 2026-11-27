@@ -23,6 +23,13 @@ export interface PostEditedPayload {
   at: string;
 }
 
+export interface PostUpdatedPayload {
+  postId: string;
+  body: string;
+  hashtags: string[];
+  editedAt: string;
+}
+
 export interface PostLikedPayload {
   postId: string;
   authorId: string;
@@ -244,6 +251,10 @@ export class SocialEventPublisher {
 
   async publishPostEdited(payload: PostEditedPayload): Promise<void> {
     await this.publish('core.post.edited', payload);
+  }
+
+  async publishPostUpdated(payload: PostUpdatedPayload): Promise<void> {
+    await this.publish('core.post.updated', payload);
   }
 
   async publishPostLiked(payload: PostLikedPayload): Promise<void> {

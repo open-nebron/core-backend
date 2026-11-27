@@ -1,10 +1,23 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { authenticateRequest } from '../../auth/hook.js';
 import { userSearchRateLimiter, userGetRateLimiter } from '../../plugins/rate-limit.js';
-import { getProfilesCollection, getFollowsCollection, type ProfileDocument, DEFAULT_PRIVACY } from '../../db/mongo.js';
+import {
+  getProfilesCollection,
+  getFollowsCollection,
+  getPostsCollection,
+  getReelsCollection,
+  getStoriesCollection,
+  getSavedPostsCollection,
+  getSavedReelsCollection,
+  getSavedCommentsCollection,
+  type ProfileDocument,
+  DEFAULT_PRIVACY,
+} from '../../db/mongo.js';
 import { NotFoundError, BlockedError } from '../../utils/errors.js';
 import { computePublicUrl } from '../../lib/r2.js';
 import { env } from '../../config/env.js';
+import { getRedisClient } from '../../db/redis.js';
+import { REEL_VIEWS_BUFFER_KEY } from '../../jobs/reel-jobs.js';
 import { getBlockedUserIds, isBlockedPair } from '../social/block-filter.js';
 import { defaultAnalyticsService } from '../analytics/analytics.service.js';
 
@@ -36,7 +49,170 @@ async function authenticateUserOrInternal(
   return authenticateRequest(request, reply);
 }
 
+async function computeUserStats(
+  targetUserId: string,
+  viewerId: string | undefined,
+  isSelf: boolean
+) {
+  const collection = getProfilesCollection();
+  const doc = await collection.findOne({ userId: targetUserId });
+  if (!doc) {
+    throw new NotFoundError(`User with ID '${targetUserId}' not found`);
+  }
+
+  if (!isSelf && viewerId) {
+    const blocked = await isBlockedPair(viewerId, targetUserId);
+    if (blocked) {
+      throw new BlockedError();
+    }
+  }
+
+  const [postAgg, reelAgg, storiesDocs] = await Promise.all([
+    getPostsCollection()
+      .aggregate<{ postCount: number; totalLikes: number; totalShares: number; totalSaves: number }>([
+        { $match: { authorId: targetUserId, deleted: false } },
+        {
+          $group: {
+            _id: null,
+            postCount: { $sum: 1 },
+            totalLikes: { $sum: { $ifNull: ['$likeCount', 0] } },
+            totalShares: { $sum: { $ifNull: ['$shareCount', 0] } },
+            totalSaves: { $sum: { $ifNull: ['$saveCount', 0] } },
+          },
+        },
+      ])
+      .toArray(),
+    getReelsCollection()
+      .find(
+        { authorId: targetUserId, deleted: false },
+        { projection: { _id: 1, likeCount: 1, viewCount: 1, shareCount: 1, saveCount: 1 } }
+      )
+      .toArray(),
+    getStoriesCollection()
+      .find({ authorId: targetUserId }, { projection: { viewerCount: 1, viewers: 1 } })
+      .toArray(),
+  ]);
+
+  let bufferedViewsTotal = 0;
+  if (reelAgg.length > 0) {
+    try {
+      const redis = getRedisClient();
+      if (typeof (redis as any).hmget === 'function') {
+        const vals = await redis.hmget(
+          REEL_VIEWS_BUFFER_KEY,
+          ...reelAgg.map((r) => r._id.toString())
+        );
+        for (const v of vals ?? []) {
+          const n = Number.parseInt(v ?? '0', 10);
+          if (Number.isFinite(n) && n > 0) bufferedViewsTotal += n;
+        }
+      }
+    } catch {
+      // Ignore Redis buffer fallback error
+    }
+  }
+
+  const pStats = postAgg[0] ?? { postCount: 0, totalLikes: 0, totalShares: 0, totalSaves: 0 };
+  let reelLikes = 0;
+  let reelViews = 0;
+  let reelShares = 0;
+  let reelSaves = 0;
+  for (const r of reelAgg) {
+    reelLikes += r.likeCount ?? 0;
+    reelViews += r.viewCount ?? 0;
+    reelShares += r.shareCount ?? 0;
+    reelSaves += r.saveCount ?? 0;
+  }
+
+  let storyViews = 0;
+  for (const st of storiesDocs) {
+    storyViews += st.viewerCount ?? (Array.isArray(st.viewers) ? st.viewers.length : 0);
+  }
+
+  const privacy = doc.privacy || DEFAULT_PRIVACY;
+  const includeOnline =
+    isSelf || privacy.showOnlineStatus === 'everyone' || privacy.showOnlineStatus === 'contacts';
+  const includeLastSeen =
+    isSelf || privacy.showLastSeen === 'everyone' || privacy.showLastSeen === 'contacts';
+
+  const result: Record<string, unknown> = {
+    userId: doc.userId,
+    postCount: pStats.postCount > 0 ? pStats.postCount : doc.postCount ?? 0,
+    reelCount: reelAgg.length,
+    totalLikesReceived: pStats.totalLikes + reelLikes,
+    totalViewsReceived: reelViews + bufferedViewsTotal + storyViews,
+    followerCount: doc.followerCount ?? 0,
+    followingCount: doc.followingCount ?? 0,
+  };
+
+  if (includeOnline && doc.online !== undefined) {
+    result.online = doc.online;
+  }
+  if (includeLastSeen && doc.lastSeenAt !== undefined) {
+    result.lastSeenAt =
+      doc.lastSeenAt === null
+        ? null
+        : doc.lastSeenAt instanceof Date
+          ? doc.lastSeenAt.toISOString()
+          : new Date(doc.lastSeenAt).toISOString();
+  }
+
+  if (isSelf) {
+    const [savedPostsCount, savedReelsCount, savedCommentsCount] = await Promise.all([
+      getSavedPostsCollection().countDocuments({ userId: targetUserId }),
+      getSavedReelsCollection().countDocuments({ userId: targetUserId }),
+      getSavedCommentsCollection().countDocuments({ userId: targetUserId }),
+    ]);
+    result.savedCount = savedPostsCount + savedReelsCount + savedCommentsCount;
+    result.totalSharesReceived = pStats.totalShares + reelShares;
+    result.totalSavesReceived = pStats.totalSaves + reelSaves;
+    result.privacy = privacy;
+  }
+
+  return result;
+}
+
 export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
+  // GET /users/me/stats (own full stats)
+  app.get(
+    '/users/me/stats',
+    {
+      preHandler: [authenticateRequest, userGetRateLimiter],
+      schema: {
+        description: 'Get aggregate public + private stats for authenticated user',
+        tags: ['Users'],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const stats = await computeUserStats(request.user.userId, request.user.userId, true);
+      return reply.status(200).send(stats);
+    }
+  );
+
+  // GET /users/:userId/stats (privacy-respecting public stats)
+  app.get<{ Params: ByUserIdParams }>(
+    '/users/:userId/stats',
+    {
+      preHandler: [authenticateRequest, userGetRateLimiter],
+      schema: {
+        description: 'Get aggregate public stats for a user respecting privacy and blocks',
+        tags: ['Users'],
+        params: {
+          type: 'object',
+          properties: {
+            userId: { type: 'string' },
+          },
+          required: ['userId'],
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: ByUserIdParams }>, reply: FastifyReply) => {
+      const targetUserId = (request.params.userId || '').trim();
+      const viewerId = request.user.userId;
+      const stats = await computeUserStats(targetUserId, viewerId, viewerId === targetUserId);
+      return reply.status(200).send(stats);
+    }
+  );
   // 1. GET /users/search?q=<string>&limit=20
   app.get<{ Querystring: SearchUsersQuery }>(
     '/users/search',

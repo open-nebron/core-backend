@@ -44,6 +44,10 @@ const envSchema = z
     CHAT_SERVICE_URL: z.string().default('http://localhost:4003'),
     VOICE_SERVICE_URL: z.string().default('http://localhost:4004'),
 
+    // Meilisearch
+    MEILI_HOST: z.string().default('http://localhost:7700'),
+    MEILI_MASTER_KEY: z.string().default('masterKeyChangeMeInProd123'),
+
     // Decisions & Notifications
     DECISION_REPORTS_NOTIFY: z.enum(['email', 'dashboard']).default('email'),
     DECISION_COMMENT_THREADING: z.enum(['two-level', 'infinite']).default('two-level'),

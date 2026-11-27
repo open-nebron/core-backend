@@ -28,6 +28,7 @@ import { computePublicUrl, isValidUserKey, headObject, deleteObject, ACCEPTED_IM
 import { env } from '../../../config/env.js';
 import { sanitizePostBody } from '../validate.js';
 import { resolveAndRecordTokens, emitTokenEvents } from '../tokens.js';
+import { defaultSocialSearchService } from '../../search/meili.service.js';
 
 export interface AuthorSummary {
   userId: string;
@@ -196,6 +197,14 @@ export class PostService {
       body,
       hasImage: Boolean(finalImageKey),
       createdAt: now.toISOString(),
+    });
+    await defaultSocialSearchService.indexPost({
+      id: postIdStr,
+      authorId,
+      body,
+      hashtags,
+      createdAt: now,
+      likeCount: 0,
     });
 
     await emitTokenEvents({
@@ -380,6 +389,7 @@ export class PostService {
       authorId: viewerId,
       at: new Date().toISOString(),
     });
+    await defaultSocialSearchService.deletePost(postId.toString());
   }
 
   async adminDeletePost(postIdStr: string): Promise<void> {
@@ -400,6 +410,7 @@ export class PostService {
       authorId: post.authorId,
       at: new Date().toISOString(),
     });
+    await defaultSocialSearchService.deletePost(postId.toString());
   }
 
   async getFeed(
@@ -484,6 +495,17 @@ export class PostService {
       hasImage: Boolean(updated.imageKey),
       at: (updated.updatedAt || new Date()).toISOString(),
     });
+    await this.publisher.publishPostUpdated({
+      postId: postId.toString(),
+      body: updated.body,
+      hashtags: updated.hashtags ?? [],
+      editedAt: (updated.updatedAt || new Date()).toISOString(),
+    });
+    await defaultSocialSearchService.updatePost(
+      postId.toString(),
+      updated.body,
+      updated.hashtags ?? []
+    );
 
     if (patch.body !== undefined && tokenFields.mentions && tokenFields.hashtags) {
       await emitTokenEvents({
