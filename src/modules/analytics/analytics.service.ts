@@ -19,6 +19,7 @@ import {
   type AnalyticsSource,
   type CreatorDailyStatsDocument,
 } from '../../db/mongo.js';
+import { computePublicUrl } from '../../lib/r2.js';
 import { getRedisClient } from '../../db/redis.js';
 import { REEL_VIEWS_BUFFER_KEY } from '../../jobs/reel-jobs.js';
 import { BlockedError, ForbiddenError, NotFoundError } from '../../utils/errors.js';
@@ -38,9 +39,40 @@ import {
 const IMPRESSION_DEDUP_TTL = 24 * 60 * 60; // 24h
 const PROFILE_VISIT_DEDUP_TTL = 6 * 60 * 60; // 6h
 
+export interface OverviewTopContentItem {
+  contentType: AnalyticsContentType;
+  contentId: string;
+  preview: string;
+  thumbnailUrl?: string | null;
+  metrics: {
+    impressions: number;
+    reach: number;
+    views: number;
+    likes: number;
+    comments: number;
+    shares: number;
+    saves: number;
+    engagementScore: number;
+  };
+}
+
+export interface OverviewDailyActivityPoint {
+  date: string;
+  followersGained: number;
+  impressions: number;
+  reach: number;
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  saves: number;
+  engagement: number;
+}
+
 export interface OverviewMetricsResponse {
   period: AnalyticsPeriod;
   followers: { total: number; gained: number };
+  profileVisits: number;
   content: { posts: number; reels: number; stories: number };
   engagement: {
     likes: number;
@@ -51,21 +83,14 @@ export interface OverviewMetricsResponse {
     impressions: number;
     reach: number;
   };
-  topContent: Array<{
-    contentType: AnalyticsContentType;
-    contentId: string;
-    preview: string;
-    metrics: {
-      impressions: number;
-      reach: number;
-      views: number;
-      likes: number;
-      comments: number;
-      shares: number;
-      saves: number;
-      engagementScore: number;
-    };
-  }>;
+  topContent: OverviewTopContentItem[];
+  topByType: {
+    post: OverviewTopContentItem | null;
+    reel: OverviewTopContentItem | null;
+    story: OverviewTopContentItem | null;
+  };
+  dailyActivity: OverviewDailyActivityPoint[];
+  activityHeatmap: number[][];
   bestPerformingDay: string | null;
   bestTimeToPost: number[];
 }
@@ -73,6 +98,7 @@ export interface OverviewMetricsResponse {
 export interface PostAnalyticsRow {
   postId: string;
   preview: string;
+  thumbnailUrl: string | null;
   createdAt: string;
   impressions: number;
   reach: number;
@@ -88,6 +114,7 @@ export interface PostAnalyticsRow {
 export interface ReelAnalyticsRow {
   reelId: string;
   preview: string;
+  thumbnailUrl: string | null;
   createdAt: string;
   views: number;
   uniqueViews: number;
@@ -105,6 +132,8 @@ export interface ReelAnalyticsRow {
 export interface StoryAnalyticsRow {
   storyId: string;
   preview: string;
+  thumbnailUrl: string | null;
+  mediaType: 'image' | 'video' | null;
   createdAt: string;
   uniqueViewers: number;
   totalViews: number;
@@ -138,15 +167,35 @@ export interface ContentDeepDiveResponse {
   contentType: AnalyticsContentType;
   contentId: string;
   preview: string;
+  thumbnailUrl: string | null;
+  mediaType?: 'image' | 'video' | null;
+  createdAt: string;
   period: AnalyticsPeriod;
+  profileVisits: number;
+  newFollowers: number;
   totals: Omit<TimeSeriesBucket, 'date'>;
   series: TimeSeriesBucket[];
+  trafficSources: Array<{ source: string; count: number }>;
+  watchThroughBuckets?: Array<{
+    bucket: string;
+    minPct: number;
+    count: number;
+    percentage: number;
+  }>;
+  funnel?: {
+    impressions: number;
+    views: number;
+    completed: number;
+    replied: number;
+  };
+  hourlyViews?: Array<{ hourOffset: number; label: string; views: number }>;
 }
 
 export interface AudienceAnalyticsResponse {
   followerGrowth: Array<{ date: string; count: number }>;
   activeHours: Array<{ hour: number; followers: number }>;
   followSources: Array<{ source: string; count: number }>;
+  activityHeatmap: number[][];
 }
 
 /**
@@ -611,28 +660,67 @@ export class AnalyticsService {
 
   async getOverview(creatorId: string, period: AnalyticsPeriod): Promise<OverviewMetricsResponse> {
     const data = await this.loadCreatorContentAndMetrics(creatorId, period);
-    const { range, targets, posts, reels, stories, reelDocMap, postDocMap, dailyMap, creatorDailyMap, byItemDay } = data;
+    const { range, targets, posts, reels, stories, reelDocMap, postDocMap, storyDocMap, dailyMap, creatorDailyMap, byItemDay } = data;
     const database = this.db();
+    const targetIds = targets.map((t) => t.contentId);
     const bufferedReelViews = await this.getBufferedReelViews(reels.map((r) => r._id.toString()));
 
-    const [profile, rawFollowsInPeriod, rawImpressionsInPeriod] = await Promise.all([
+    const [
+      profile,
+      rawFollowsInPeriod,
+      rawProfileVisitsInPeriod,
+      rawImpressionsInPeriod,
+      rawViewsInPeriod,
+    ] = await Promise.all([
       getProfilesCollection(database).findOne({ userId: creatorId }),
       getFollowsCollection(database)
         .find({ followingId: creatorId, createdAt: { $gte: range.start, $lt: range.end } })
         .toArray(),
-      targets.length > 0
+      getProfileVisitsCollection(database)
+        .find(
+          { visitedUserId: creatorId, at: { $gte: range.start, $lt: range.end } },
+          { projection: { _id: 0, at: 1 } }
+        )
+        .toArray(),
+      targetIds.length > 0
         ? getImpressionsCollection(database)
             .find({
-              contentId: { $in: targets.map((t) => t.contentId) },
+              contentId: { $in: targetIds },
               seenAt: { $gte: range.start, $lt: range.end },
             })
-            .project({ userId: 1, seenAt: 1 })
+            .project({ _id: 0, userId: 1, seenAt: 1 })
+            .toArray()
+        : Promise.resolve([]),
+      targetIds.length > 0
+        ? getContentViewsCollection(database)
+            .find({
+              contentId: { $in: targetIds },
+              startedAt: { $gte: range.start, $lt: range.end },
+            })
+            .project({ _id: 0, startedAt: 1 })
             .toArray()
         : Promise.resolve([]),
     ]);
 
     const hourHistogram = new Array(24).fill(0);
+    const activityHeatmap: number[][] = Array.from({ length: 7 }, () => new Array(24).fill(0));
     const dayScoreTotals = new Map<string, number>();
+
+    const dailyActivityMap = new Map<string, OverviewDailyActivityPoint>();
+    for (const dateKey of range.dateKeys) {
+      dailyActivityMap.set(dateKey, {
+        date: dateKey,
+        followersGained: 0,
+        impressions: 0,
+        reach: 0,
+        views: 0,
+        likes: 0,
+        comments: 0,
+        shares: 0,
+        saves: 0,
+        engagement: 0,
+      });
+    }
 
     let likes = 0;
     let comments = 0;
@@ -642,7 +730,7 @@ export class AnalyticsService {
     let impressions = 0;
     let rolledPastReach = 0;
 
-    const topCandidates: OverviewMetricsResponse['topContent'] = [];
+    const topCandidates: OverviewTopContentItem[] = [];
 
     for (const target of targets) {
       const merged = this.mergePeriodTotalsForItem(
@@ -659,24 +747,58 @@ export class AnalyticsService {
       let itemShares = t.shares;
       let itemSaves = t.saves;
       let itemViews = t.views;
+      let thumbnailUrl: string | null = null;
 
-      if (inPeriod && target.contentType === 'post') {
+      if (target.contentType === 'post') {
         const pDoc = postDocMap.get(target.contentId);
-        if (pDoc) {
+        thumbnailUrl = pDoc?.imageUrl ?? null;
+        if (inPeriod && pDoc) {
           itemLikes = Math.max(itemLikes, pDoc.likeCount ?? 0);
           itemComments = Math.max(itemComments, pDoc.commentCount ?? 0);
           itemShares = Math.max(itemShares, pDoc.shareCount ?? 0);
           itemSaves = Math.max(itemSaves, pDoc.saveCount ?? 0);
         }
-      } else if (inPeriod && target.contentType === 'reel') {
+      } else if (target.contentType === 'reel') {
         const rDoc = reelDocMap.get(target.contentId);
-        if (rDoc) {
+        thumbnailUrl = rDoc?.thumbnailUrl ?? null;
+        if (inPeriod && rDoc) {
           itemLikes = Math.max(itemLikes, rDoc.likeCount ?? 0);
           itemComments = Math.max(itemComments, rDoc.commentCount ?? 0);
           itemShares = Math.max(itemShares, rDoc.shareCount ?? 0);
           itemSaves = Math.max(itemSaves, rDoc.saveCount ?? 0);
           itemViews = Math.max(itemViews, (rDoc.viewCount ?? 0) + (bufferedReelViews.get(target.contentId) ?? 0));
         }
+      } else {
+        const sDoc = storyDocMap.get(target.contentId);
+        if (sDoc) {
+          thumbnailUrl = sDoc.thumbnailKey
+            ? computePublicUrl(sDoc.thumbnailKey)
+            : sDoc.mediaType === 'image'
+              ? sDoc.mediaUrl
+              : null;
+        }
+      }
+
+      for (const b of merged.series) {
+        const dayPt = dailyActivityMap.get(b.date);
+        if (!dayPt) continue;
+        dayPt.impressions += b.impressions;
+        dayPt.reach += b.reach;
+        dayPt.views += b.views;
+        dayPt.likes += b.likes;
+        dayPt.comments += b.comments;
+        dayPt.shares += b.shares;
+        dayPt.saves += b.saves;
+      }
+
+      // Attribute any denormalized counter deltas on creation day inside period
+      const createdDayPt = dailyActivityMap.get(toUtcDateKey(target.createdAt));
+      if (inPeriod && createdDayPt) {
+        createdDayPt.likes += Math.max(0, itemLikes - t.likes);
+        createdDayPt.comments += Math.max(0, itemComments - t.comments);
+        createdDayPt.shares += Math.max(0, itemShares - t.shares);
+        createdDayPt.saves += Math.max(0, itemSaves - t.saves);
+        createdDayPt.views += Math.max(0, itemViews - t.views);
       }
 
       likes += itemLikes;
@@ -700,6 +822,7 @@ export class AnalyticsService {
           contentType: target.contentType,
           contentId: target.contentId,
           preview: target.preview,
+          thumbnailUrl,
           metrics: {
             impressions: t.impressions,
             reach: t.reach,
@@ -719,7 +842,17 @@ export class AnalyticsService {
     const rawDatesSeen = new Set<string>();
     for (const imp of rawImpressionsInPeriod) {
       if (imp.userId) uniqueReachSet.add(String(imp.userId));
-      if (imp.seenAt) rawDatesSeen.add(toUtcDateKey(imp.seenAt));
+      if (imp.seenAt) {
+        const d = imp.seenAt instanceof Date ? imp.seenAt : new Date(imp.seenAt);
+        rawDatesSeen.add(toUtcDateKey(d));
+        activityHeatmap[d.getUTCDay()][d.getUTCHours()]++;
+      }
+    }
+    for (const vw of rawViewsInPeriod) {
+      if (vw.startedAt) {
+        const d = vw.startedAt instanceof Date ? vw.startedAt : new Date(vw.startedAt);
+        activityHeatmap[d.getUTCDay()][d.getUTCHours()]++;
+      }
     }
     for (const dateKey of range.dateKeys) {
       if (dateKey !== range.todayKey && !rawDatesSeen.has(dateKey)) {
@@ -732,15 +865,37 @@ export class AnalyticsService {
     // Gained followers combining rolled past dates + raw follows
     const rawFollowsByDay = new Map<string, number>();
     for (const f of rawFollowsInPeriod) {
-      const dk = toUtcDateKey(f.createdAt instanceof Date ? f.createdAt : new Date(f.createdAt));
+      const d = f.createdAt instanceof Date ? f.createdAt : new Date(f.createdAt);
+      const dk = toUtcDateKey(d);
       rawFollowsByDay.set(dk, (rawFollowsByDay.get(dk) ?? 0) + 1);
+      activityHeatmap[d.getUTCDay()][d.getUTCHours()]++;
     }
+    const rawVisitsByDay = new Map<string, number>();
+    for (const pv of rawProfileVisitsInPeriod) {
+      const d = pv.at instanceof Date ? pv.at : new Date(pv.at);
+      const dk = toUtcDateKey(d);
+      rawVisitsByDay.set(dk, (rawVisitsByDay.get(dk) ?? 0) + 1);
+      activityHeatmap[d.getUTCDay()][d.getUTCHours()]++;
+    }
+
     let followersGained = 0;
+    let profileVisits = 0;
     for (const dateKey of range.dateKeys) {
       const cs = creatorDailyMap.get(dateKey);
       const rawCount = rawFollowsByDay.get(dateKey) ?? 0;
-      followersGained +=
+      const dayFollows =
         cs && dateKey !== range.todayKey ? Math.max(cs.followersGained ?? 0, rawCount) : rawCount;
+      followersGained += dayFollows;
+
+      const rawV = rawVisitsByDay.get(dateKey) ?? 0;
+      profileVisits +=
+        cs && dateKey !== range.todayKey ? Math.max(cs.profileVisits ?? 0, rawV) : rawV;
+
+      const dayPt = dailyActivityMap.get(dateKey);
+      if (dayPt) {
+        dayPt.followersGained = dayFollows;
+        dayPt.engagement = dayPt.likes + dayPt.comments + dayPt.shares + dayPt.saves;
+      }
     }
 
     topCandidates.sort((a, b) => b.metrics.engagementScore - a.metrics.engagementScore);
@@ -790,6 +945,7 @@ export class AnalyticsService {
         total: profile?.followerCount ?? 0,
         gained: followersGained,
       },
+      profileVisits,
       content: {
         posts: postsCreatedCount,
         reels: reelsCreatedCount,
@@ -805,6 +961,13 @@ export class AnalyticsService {
         reach: totalReach,
       },
       topContent: topCandidates.slice(0, 5),
+      topByType: {
+        post: topCandidates.find((c) => c.contentType === 'post') ?? null,
+        reel: topCandidates.find((c) => c.contentType === 'reel') ?? null,
+        story: topCandidates.find((c) => c.contentType === 'story') ?? null,
+      },
+      dailyActivity: Array.from(dailyActivityMap.values()),
+      activityHeatmap,
       bestPerformingDay,
       bestTimeToPost,
     };
@@ -884,6 +1047,7 @@ export class AnalyticsService {
       return {
         postId: cid,
         preview: (p.body || '').slice(0, 120),
+        thumbnailUrl: p.imageUrl ?? null,
         createdAt: createdAt.toISOString(),
         impressions: t.impressions,
         reach: t.reach,
@@ -951,6 +1115,7 @@ export class AnalyticsService {
       return {
         reelId: cid,
         preview: (r.caption || 'Reel').slice(0, 120),
+        thumbnailUrl: r.thumbnailUrl ?? null,
         createdAt: createdAt.toISOString(),
         views,
         uniqueViews,
@@ -974,7 +1139,7 @@ export class AnalyticsService {
     before?: string
   ): Promise<StoryAnalyticsRow[]> {
     const data = await this.loadCreatorContentAndMetrics(creatorId, period);
-    const { range, targets, dailyMap, byItemDay } = data;
+    const { range, targets, storyDocMap, dailyMap, byItemDay } = data;
     const beforeDate = before ? new Date(before) : undefined;
 
     const storyTargets = targets
@@ -995,12 +1160,22 @@ export class AnalyticsService {
         byItemDay
       );
       const t = merged.totals;
+      const sDoc = storyDocMap.get(s.contentId);
+      const thumbnailUrl = sDoc
+        ? sDoc.thumbnailKey
+          ? computePublicUrl(sDoc.thumbnailKey)
+          : sDoc.mediaType === 'image'
+            ? sDoc.mediaUrl
+            : null
+        : null;
       const completionRate =
         t.views > 0 ? Number(((t.completions / t.views) * 100).toFixed(2)) : 0;
 
       return {
         storyId: s.contentId,
         preview: s.preview,
+        thumbnailUrl,
+        mediaType: sDoc?.mediaType ?? null,
         createdAt: s.createdAt.toISOString(),
         uniqueViewers: t.uniqueViews,
         totalViews: t.views,
@@ -1023,12 +1198,25 @@ export class AnalyticsService {
     const database = this.db();
 
     let targetRef: ContentTargetRef | null = null;
+    let thumbnailUrl: string | null = null;
+    let mediaType: 'image' | 'video' | null = null;
+    let docLikes = 0;
+    let docComments = 0;
+    let docShares = 0;
+    let docSaves = 0;
+    let docViews = 0;
+
     if (contentType === 'post') {
       const post = await getPostsCollection(database).findOne({ _id: oid, deleted: false });
       if (post) {
         if (post.authorId !== creatorId) {
           throw new ForbiddenError('Cannot access analytics for another user content', 'forbidden');
         }
+        thumbnailUrl = post.imageUrl ?? null;
+        docLikes = post.likeCount ?? 0;
+        docComments = post.commentCount ?? 0;
+        docShares = post.shareCount ?? 0;
+        docSaves = post.saveCount ?? 0;
         targetRef = {
           contentType: 'post',
           contentId,
@@ -1043,6 +1231,14 @@ export class AnalyticsService {
         if (reel.authorId !== creatorId) {
           throw new ForbiddenError('Cannot access analytics for another user content', 'forbidden');
         }
+        thumbnailUrl = reel.thumbnailUrl ?? null;
+        mediaType = 'video';
+        docLikes = reel.likeCount ?? 0;
+        docComments = reel.commentCount ?? 0;
+        docShares = reel.shareCount ?? 0;
+        docSaves = reel.saveCount ?? 0;
+        const buf = await this.getBufferedReelViews([contentId]);
+        docViews = (reel.viewCount ?? 0) + (buf.get(contentId) ?? 0);
         targetRef = {
           contentType: 'reel',
           contentId,
@@ -1057,6 +1253,12 @@ export class AnalyticsService {
         if (story.authorId !== creatorId) {
           throw new ForbiddenError('Cannot access analytics for another user content', 'forbidden');
         }
+        mediaType = story.mediaType;
+        thumbnailUrl = story.thumbnailKey
+          ? computePublicUrl(story.thumbnailKey)
+          : story.mediaType === 'image'
+            ? story.mediaUrl
+            : null;
         targetRef = {
           contentType: 'story',
           contentId,
@@ -1095,11 +1297,26 @@ export class AnalyticsService {
     }
 
     const range = getPeriodRange(period);
-    const [dailyDocs, rawRes] = await Promise.all([
+    const [dailyDocs, rawRes, impressionSourcesDocs, rawViewsDocs, creatorTotals] = await Promise.all([
       getAnalyticsDailyCollection(database)
         .find({ contentType, contentId, date: { $in: range.dateKeys } })
         .toArray(),
       aggregateRawMetricsWindow(database, [targetRef], range.start, range.end),
+      getImpressionsCollection(database)
+        .find(
+          { contentType, contentId, seenAt: { $gte: range.start, $lt: range.end } },
+          { projection: { _id: 0, source: 1 } }
+        )
+        .toArray(),
+      contentType !== 'post'
+        ? getContentViewsCollection(database)
+            .find(
+              { contentType, contentId, startedAt: { $gte: range.start, $lt: range.end } },
+              { projection: { _id: 0, startedAt: 1, watchedSeconds: 1, totalSeconds: 1, completed: 1 } }
+            )
+            .toArray()
+        : Promise.resolve([]),
+      this.getUnrolledCreatorTotals(creatorId, range.start, range.end),
     ]);
 
     const dailyMap = new Map<string, AnalyticsDailyDocument>();
@@ -1116,13 +1333,110 @@ export class AnalyticsService {
     );
 
     const { hourEngagement: _ignored, ...totals } = merged.totals;
+    const inPeriod = targetRef.createdAt >= range.start && targetRef.createdAt <= range.end;
+    if (inPeriod && (contentType === 'post' || contentType === 'reel')) {
+      totals.likes = Math.max(totals.likes, docLikes);
+      totals.comments = Math.max(totals.comments, docComments);
+      totals.shares = Math.max(totals.shares, docShares);
+      totals.saves = Math.max(totals.saves, docSaves);
+      if (contentType === 'reel') {
+        totals.views = Math.max(totals.views, docViews);
+      }
+    }
+
+    const sourceMap = new Map<string, number>();
+    for (const doc of impressionSourcesDocs) {
+      const s = doc.source || 'feed';
+      sourceMap.set(s, (sourceMap.get(s) ?? 0) + 1);
+    }
+    const trafficSources = Array.from(sourceMap.entries())
+      .map(([source, count]) => ({ source, count }))
+      .sort((a, b) => b.count - a.count);
+
+    let watchThroughBuckets: ContentDeepDiveResponse['watchThroughBuckets'];
+    if (contentType === 'reel') {
+      const totalViewsCount = rawViewsDocs.length;
+      watchThroughBuckets = Array.from({ length: 10 }, (_, idx) => {
+        const minPct = idx * 10;
+        const maxPct = minPct + 10;
+        let reached = 0;
+        for (const v of rawViewsDocs) {
+          const pct =
+            v.totalSeconds && v.totalSeconds > 0
+              ? Math.min(100, ((v.watchedSeconds ?? 0) / v.totalSeconds) * 100)
+              : v.completed
+                ? 100
+                : 0;
+          if (pct >= minPct || (minPct === 90 && v.completed)) {
+            reached++;
+          }
+        }
+        return {
+          bucket: `${minPct}-${maxPct}%`,
+          minPct,
+          count: reached,
+          percentage: totalViewsCount > 0 ? Math.round((reached / totalViewsCount) * 100) : 0,
+        };
+      });
+    }
+
+    let funnel: ContentDeepDiveResponse['funnel'];
+    let hourlyViews: ContentDeepDiveResponse['hourlyViews'];
+    if (contentType === 'story') {
+      funnel = {
+        impressions: Math.max(totals.impressions, totals.views),
+        views: totals.views,
+        completed: totals.completions,
+        replied: totals.replies,
+      };
+
+      const hourBuckets = new Array(24).fill(0);
+      const storyStartMs = targetRef.createdAt.getTime();
+      if (rawViewsDocs.length > 0) {
+        for (const v of rawViewsDocs) {
+          const ms = (v.startedAt instanceof Date ? v.startedAt : new Date(v.startedAt)).getTime();
+          const offset = Math.floor((ms - storyStartMs) / 3_600_000);
+          if (offset >= 0 && offset < 24) {
+            hourBuckets[offset]++;
+          }
+        }
+      } else if (targetRef.storyViewers?.length) {
+        for (const sv of targetRef.storyViewers) {
+          const ms = (sv.viewedAt instanceof Date ? sv.viewedAt : new Date(sv.viewedAt)).getTime();
+          const offset = Math.floor((ms - storyStartMs) / 3_600_000);
+          if (offset >= 0 && offset < 24) {
+            hourBuckets[offset]++;
+          }
+        }
+      }
+      hourlyViews = hourBuckets.map((count, hourOffset) => ({
+        hourOffset,
+        label: `+${hourOffset}h`,
+        views: count,
+      }));
+    }
+
     return {
       contentType,
       contentId,
       preview: targetRef.preview,
+      thumbnailUrl,
+      mediaType,
+      createdAt: targetRef.createdAt.toISOString(),
       period,
+      profileVisits: merged.profileVisits > 0 ? merged.profileVisits : creatorTotals.totalVisits,
+      newFollowers:
+        merged.newFollowers > 0
+          ? merged.newFollowers
+          : contentType === 'reel'
+            ? creatorTotals.reelFollows
+            : creatorTotals.totalFollows,
       totals,
       series: merged.series,
+      trafficSources,
+      ...(watchThroughBuckets ? { watchThroughBuckets } : {}),
+      ...(funnel ? { funnel } : {}),
+      ...(hourlyViews ? { hourlyViews } : {}),
     };
   }
 
@@ -1164,6 +1478,9 @@ export class AnalyticsService {
 
     const followerIds = allFollowers.map((f) => f.followerId);
     const activeSetsByHour: Set<string>[] = Array.from({ length: 24 }, () => new Set<string>());
+    const heatmapSets: Set<string>[][] = Array.from({ length: 7 }, () =>
+      Array.from({ length: 24 }, () => new Set<string>())
+    );
 
     if (followerIds.length > 0) {
       const followerViews = await getContentViewsCollection(database)
@@ -1176,6 +1493,7 @@ export class AnalyticsService {
       for (const v of followerViews) {
         const d = v.startedAt instanceof Date ? v.startedAt : new Date(v.startedAt);
         activeSetsByHour[d.getUTCHours()].add(v.userId);
+        heatmapSets[d.getUTCDay()][d.getUTCHours()].add(v.userId);
       }
     }
 
@@ -1183,6 +1501,7 @@ export class AnalyticsService {
       hour,
       followers: set.size,
     }));
+    const activityHeatmap = heatmapSets.map((row) => row.map((set) => set.size));
 
     const sourceCounts = new Map<string, number>();
     for (const fs of followSourceDocs) {
@@ -1196,6 +1515,7 @@ export class AnalyticsService {
       followerGrowth,
       activeHours,
       followSources,
+      activityHeatmap,
     };
   }
 }

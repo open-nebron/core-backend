@@ -1075,4 +1075,143 @@ describe('Analytics Infrastructure (Stage V4-4)', () => {
       expect(raw).not.toContain('viewer_b_v44');
     }
   });
+
+  it('24. V4-5 Overview and Reel deep-dive include dailyActivity, activityHeatmap, trafficSources, and watchThroughBuckets without PII', async () => {
+    const u = crypto.randomUUID();
+    const uTok = await createMockAccessToken({ sub: u, email: 'dash_u@nebron.io' });
+    await db.collection('profiles').insertOne({
+      userId: u,
+      username: 'dash_u_v45',
+      name: null,
+      language: 'en',
+      theme: 'dark',
+      avatarKey: null,
+      bannerKey: null,
+      followerCount: 2,
+      followingCount: 0,
+      postCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const reelId = await insertReel(u, 'Dashboard reel deep dive');
+    const reel = { id: reelId };
+
+    await app.inject({
+      method: 'POST',
+      url: '/analytics/profile-visit',
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { visitedUserId: u },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/analytics/impression',
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { contentType: 'reel', contentId: reel.id, source: 'explore' },
+    });
+    const startRes = await app.inject({
+      method: 'POST',
+      url: '/analytics/view-start',
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { contentType: 'reel', contentId: reel.id, source: 'explore', totalSeconds: 20 },
+    });
+    const viewId = startRes.json().viewId;
+    await app.inject({
+      method: 'POST',
+      url: '/analytics/view-end',
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { viewId, watchedSeconds: 11, completed: false },
+    });
+
+    const [ovRes, deepRes] = await Promise.all([
+      app.inject({ method: 'GET', url: '/analytics/me/overview?period=7d', headers: { authorization: `Bearer ${uTok}` } }),
+      app.inject({ method: 'GET', url: `/analytics/me/content/reel/${reel.id}?period=7d`, headers: { authorization: `Bearer ${uTok}` } }),
+    ]);
+
+    expect(ovRes.statusCode).toBe(200);
+    const ov = ovRes.json();
+    expect(ov.profileVisits).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(ov.dailyActivity)).toBe(true);
+    expect(ov.dailyActivity.length).toBe(7);
+    expect(Array.isArray(ov.activityHeatmap)).toBe(true);
+    expect(ov.activityHeatmap.length).toBe(7);
+    expect(ov.activityHeatmap[0].length).toBe(24);
+    expect(ov.topByType?.reel?.contentId).toBe(reel.id);
+    expect(ovRes.body).not.toContain(viewerB);
+
+    expect(deepRes.statusCode).toBe(200);
+    const deep = deepRes.json();
+    expect(deep.trafficSources).toEqual(expect.arrayContaining([{ source: 'explore', count: 1 }]));
+    expect(deep.watchThroughBuckets.length).toBe(10);
+    expect(deep.watchThroughBuckets[0].percentage).toBe(100);
+    expect(deep.watchThroughBuckets[5].percentage).toBe(100); // >= 50% (11/20 = 55%)
+    expect(deep.watchThroughBuckets[9].percentage).toBe(0);   // < 90%
+    expect(deepRes.body).not.toContain(viewerB);
+  });
+
+  it('25. V4-5 Story deep-dive returns funnel and 24 hourlyViews buckets without PII', async () => {
+    const u = crypto.randomUUID();
+    const uTok = await createMockAccessToken({ sub: u, email: 'story_dash@nebron.io' });
+    await db.collection('profiles').insertOne({
+      userId: u,
+      username: 'story_dash_v45',
+      name: null,
+      language: 'en',
+      theme: 'dark',
+      avatarKey: null,
+      bannerKey: null,
+      followerCount: 0,
+      followingCount: 0,
+      postCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const storyId = new ObjectId();
+    const createdAt = new Date(Date.now() - 2 * 3_600_000);
+    await db.collection('stories').insertOne({
+      _id: storyId,
+      authorId: u,
+      mediaType: 'image',
+      mediaKey: `stories/${u}/s.jpg`,
+      mediaUrl: 'https://cdn.test/s.jpg',
+      thumbnailKey: null,
+      duration: 5,
+      caption: 'Funnel story',
+      viewers: [{ userId: viewerB, viewedAt: createdAt }],
+      viewerCount: 1,
+      expiresAt: new Date(createdAt.getTime() + 24 * 3_600_000),
+      createdAt,
+    });
+
+    await app.inject({
+      method: 'POST',
+      url: '/analytics/impression',
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { contentType: 'story', contentId: storyId.toString(), source: 'feed' },
+    });
+    const stRes = await app.inject({
+      method: 'POST',
+      url: '/analytics/view-start',
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { contentType: 'story', contentId: storyId.toString(), source: 'feed', totalSeconds: 5 },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/analytics/view-end',
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { viewId: stRes.json().viewId, watchedSeconds: 5, completed: true },
+    });
+
+    const deepRes = await app.inject({
+      method: 'GET',
+      url: `/analytics/me/content/story/${storyId.toString()}?period=7d`,
+      headers: { authorization: `Bearer ${uTok}` },
+    });
+    expect(deepRes.statusCode).toBe(200);
+    const deep = deepRes.json();
+    expect(deep.funnel).toMatchObject({ impressions: 1, views: 1, completed: 1, replied: 0 });
+    expect(deep.hourlyViews.length).toBe(24);
+    expect(deepRes.body).not.toContain(viewerB);
+  });
 });
