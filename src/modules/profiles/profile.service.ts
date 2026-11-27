@@ -25,6 +25,9 @@ export interface ProfileResponse {
   messageRequestPolicy: MessageRequestPolicy;
   avatarUrl: string | null;
   bannerUrl: string | null;
+  followerCount: number;
+  followingCount: number;
+  postCount: number;
   createdAt: string;
   updatedAt?: string;
 }
@@ -49,6 +52,9 @@ export function formatProfileResponse(doc: ProfileDocument): ProfileResponse {
     messageRequestPolicy: doc.messageRequestPolicy || 'known',
     avatarUrl: computePublicUrl(doc.avatarKey, doc.updatedAt),
     bannerUrl: computePublicUrl(doc.bannerKey, doc.updatedAt),
+    followerCount: doc.followerCount ?? 0,
+    followingCount: doc.followingCount ?? 0,
+    postCount: doc.postCount ?? 0,
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt ? doc.updatedAt.toISOString() : undefined,
   };

@@ -21,6 +21,9 @@ describe('Users API Routes (/users)', () => {
       bannerKey: 'users/usr_target_1/banner/b.jpg',
       bio: 'Alice bio',
       about: 'About Alice',
+      followerCount: 9,
+      followingCount: 4,
+      postCount: 3,
       createdAt: new Date('2026-01-01T00:00:00Z'),
       updatedAt: new Date('2026-01-01T00:00:00Z'),
     },
@@ -154,6 +157,9 @@ describe('Users API Routes (/users)', () => {
       expect(json.username).toBe('alice');
       expect(json.name).toBe('Alice Springs');
       expect(json.bio).toBe('Alice bio');
+      expect(json.followerCount).toBe(9);
+      expect(json.followingCount).toBe(4);
+      expect(json.postCount).toBe(3);
       expect(json).not.toHaveProperty('email');
     });
 
@@ -180,6 +186,9 @@ describe('Users API Routes (/users)', () => {
       expect(json.username).toBe('alice');
       expect(json.bio).toBe('Alice bio');
       expect(json.about).toBe('About Alice');
+      expect(json.followerCount).toBe(9);
+      expect(json.followingCount).toBe(4);
+      expect(json.postCount).toBe(3);
       expect(json.createdAt).toBeDefined();
       expect(json.messageRequestPolicy).toBe('known');
       expect(json).not.toHaveProperty('email');

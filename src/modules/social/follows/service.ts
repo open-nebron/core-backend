@@ -25,6 +25,7 @@ export interface UserFollowItem {
   name: string | null;
   avatarUrl: string | null;
   isFollowingViewer: boolean;
+  isFollowedByViewer?: boolean;
 }
 
 export interface UserSuggestionItem {
@@ -140,12 +141,14 @@ export class FollowService {
 
     return visibleFollowerIds.map((userId) => {
       const p = profileMap.get(userId);
+      const isFollowed = isFollowingViewerSet.has(userId);
       return {
         userId,
         username: p?.username || 'unknown',
         name: p?.name ?? null,
         avatarUrl: p ? computePublicUrl(p.avatarKey, p.updatedAt) : null,
-        isFollowingViewer: isFollowingViewerSet.has(userId),
+        isFollowingViewer: isFollowed,
+        isFollowedByViewer: isFollowed,
       };
     });
   }
@@ -175,12 +178,14 @@ export class FollowService {
 
     return visibleFollowingIds.map((userId) => {
       const p = profileMap.get(userId);
+      const isFollowed = isFollowingViewerSet.has(userId);
       return {
         userId,
         username: p?.username || 'unknown',
         name: p?.name ?? null,
         avatarUrl: p ? computePublicUrl(p.avatarKey, p.updatedAt) : null,
-        isFollowingViewer: isFollowingViewerSet.has(userId),
+        isFollowingViewer: isFollowed,
+        isFollowedByViewer: isFollowed,
       };
     });
   }

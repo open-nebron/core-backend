@@ -163,9 +163,47 @@ describe('Profile and Health API Routes', () => {
         messageRequestPolicy: 'known',
         avatarUrl: null,
         bannerUrl: null,
+        followerCount: 0,
+        followingCount: 0,
+        postCount: 0,
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
       });
+    });
+
+    it('returns stored non-zero postCount, followerCount, followingCount on GET /me', async () => {
+      const now = new Date('2026-01-01T00:00:00Z');
+      vi.spyOn(profileService, 'getProfileByUserId').mockResolvedValueOnce({
+        userId: mockUserId,
+        username: 'the_one',
+        name: 'Thomas Anderson',
+        dateOfBirth: null,
+        about: null,
+        bio: null,
+        language: 'en',
+        theme: 'system',
+        avatarKey: null,
+        bannerKey: null,
+        followerCount: 12,
+        followingCount: 5,
+        postCount: 7,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/me',
+        headers: {
+          authorization: `Bearer ${validToken}`,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const json = res.json();
+      expect(json.followerCount).toBe(12);
+      expect(json.followingCount).toBe(5);
+      expect(json.postCount).toBe(7);
     });
   });
 

@@ -67,6 +67,7 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
                     avatarUrl: { type: 'string', nullable: true },
                     followerCount: { type: 'integer' },
                     isFollowingViewer: { type: 'boolean' },
+                    isFollowedByViewer: { type: 'boolean' },
                   },
                   required: ['userId', 'username'],
                 },
@@ -127,11 +128,18 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const selectedUserIds = selectedDocs.map((d) => d.userId);
 
       let followingViewerSet = new Set<string>();
+      let followedByViewerSet = new Set<string>();
       if (viewerId && selectedUserIds.length > 0) {
-        const followDocs = await getFollowsCollection()
-          .find({ followerId: { $in: selectedUserIds }, followingId: viewerId })
-          .toArray();
-        followingViewerSet = new Set(followDocs.map((d) => d.followerId));
+        const [followersDocs, followingDocs] = await Promise.all([
+          getFollowsCollection()
+            .find({ followerId: { $in: selectedUserIds }, followingId: viewerId })
+            .toArray(),
+          getFollowsCollection()
+            .find({ followerId: viewerId, followingId: { $in: selectedUserIds } })
+            .toArray(),
+        ]);
+        followingViewerSet = new Set(followersDocs.map((d) => d.followerId));
+        followedByViewerSet = new Set(followingDocs.map((d) => d.followingId));
       }
 
       const users = selectedDocs.map((doc: ProfileDocument) => ({
@@ -141,6 +149,7 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         avatarUrl: computePublicUrl(doc.avatarKey, doc.updatedAt),
         followerCount: doc.followerCount ?? 0,
         isFollowingViewer: followingViewerSet.has(doc.userId),
+        isFollowedByViewer: followedByViewerSet.has(doc.userId),
       }));
 
       return reply.status(200).send({ users });
@@ -173,6 +182,11 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
               bannerUrl: { type: 'string', nullable: true },
               bio: { type: 'string', nullable: true },
               about: { type: 'string', nullable: true },
+              followerCount: { type: 'integer' },
+              followingCount: { type: 'integer' },
+              postCount: { type: 'integer' },
+              isFollowingViewer: { type: 'boolean' },
+              isFollowedByViewer: { type: 'boolean' },
               createdAt: { type: 'string' },
             },
             required: ['userId', 'username', 'createdAt'],
@@ -254,6 +268,11 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
               bio: { type: 'string', nullable: true },
               about: { type: 'string', nullable: true },
               messageRequestPolicy: { type: 'string', enum: ['everyone', 'known', 'nobody'] },
+              followerCount: { type: 'integer' },
+              followingCount: { type: 'integer' },
+              postCount: { type: 'integer' },
+              isFollowingViewer: { type: 'boolean' },
+              isFollowedByViewer: { type: 'boolean' },
               online: { type: 'boolean' },
               lastSeenAt: { type: 'string', nullable: true },
               privacy: {
