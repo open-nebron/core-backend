@@ -114,13 +114,19 @@ export class PostRepository {
 
   async updatePost(
     postId: ObjectId,
-    fields: { body?: string; removeImage?: boolean }
+    fields: { body?: string; removeImage?: boolean; mentions?: string[]; hashtags?: string[] }
   ): Promise<PostDocument | null> {
     const $set: Record<string, unknown> = {
       updatedAt: new Date(),
     };
     if (fields.body !== undefined) {
       $set.body = fields.body;
+    }
+    if (fields.mentions !== undefined) {
+      $set.mentions = fields.mentions;
+    }
+    if (fields.hashtags !== undefined) {
+      $set.hashtags = fields.hashtags;
     }
     if (fields.removeImage) {
       $set.imageKey = null;
@@ -133,6 +139,76 @@ export class PostRepository {
       { returnDocument: 'after' }
     );
     return res;
+  }
+
+  async getPostsByHashtag(
+    tag: string,
+    limit: number,
+    before?: Date,
+    excludeAuthorIds: string[] = []
+  ): Promise<PostDocument[]> {
+    const filter: Record<string, unknown> = {
+      hashtags: tag,
+      deleted: false,
+    };
+    if (excludeAuthorIds.length > 0) {
+      filter.authorId = { $nin: excludeAuthorIds };
+    }
+    if (before) {
+      filter.createdAt = { $lt: before };
+    }
+
+    return this.getCollection()
+      .find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(limit)
+      .toArray();
+  }
+
+  async countPostsByHashtag(
+    tag: string,
+    excludeAuthorIds: string[] = []
+  ): Promise<number> {
+    const filter: Record<string, unknown> = {
+      hashtags: tag,
+      deleted: false,
+    };
+    if (excludeAuthorIds.length > 0) {
+      filter.authorId = { $nin: excludeAuthorIds };
+    }
+    return this.getCollection().countDocuments(filter);
+  }
+
+  async getTrendingHashtags(
+    since: Date,
+    limit: number,
+    excludeAuthorIds: string[] = []
+  ): Promise<Array<{ tag: string; postCount: number }>> {
+    const matchStage: Record<string, unknown> = {
+      deleted: false,
+      createdAt: { $gte: since },
+      'hashtags.0': { $exists: true },
+    };
+    if (excludeAuthorIds.length > 0) {
+      matchStage.authorId = { $nin: excludeAuthorIds };
+    }
+
+    return this.getCollection()
+      .aggregate<{ tag: string; postCount: number }>([
+        { $match: matchStage },
+        { $unwind: '$hashtags' },
+        {
+          $group: {
+            _id: '$hashtags',
+            postCount: { $sum: 1 },
+            latestAt: { $max: '$createdAt' },
+          },
+        },
+        { $sort: { postCount: -1, latestAt: -1, _id: 1 } },
+        { $limit: limit },
+        { $project: { _id: 0, tag: '$_id', postCount: 1 } },
+      ])
+      .toArray();
   }
 
   async getPopularPosts(

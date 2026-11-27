@@ -78,6 +78,42 @@ export interface CommentUnlikedPayload {
   at: string;
 }
 
+export interface CommentUpdatedPayload {
+  commentId: string;
+  postId: string;
+  body: string;
+  editedAt: string;
+}
+
+export interface CommentPinnedPayload {
+  commentId: string;
+  postId: string;
+  by: string;
+  at: string;
+}
+
+export interface CommentUnpinnedPayload {
+  commentId: string;
+  postId: string;
+  by: string;
+  at: string;
+}
+
+export interface UserMentionedPayload {
+  userId: string;
+  byUserId: string;
+  contentType: 'post' | 'comment' | 'reel';
+  contentId: string;
+  context: string;
+  at: string;
+}
+
+export interface HashtagCreatedPayload {
+  tag: string;
+  postId: string;
+  at: string;
+}
+
 export interface UserFollowedPayload {
   followerId: string;
   followingId: string;
@@ -193,6 +229,26 @@ export class SocialEventPublisher {
 
   async publishCommentUnliked(payload: CommentUnlikedPayload): Promise<void> {
     await this.publish('core.comment.unliked', payload);
+  }
+
+  async publishCommentUpdated(payload: CommentUpdatedPayload): Promise<void> {
+    await this.publish('core.comment.updated', payload);
+  }
+
+  async publishCommentPinned(payload: CommentPinnedPayload): Promise<void> {
+    await this.publish('core.comment.pinned', payload);
+  }
+
+  async publishCommentUnpinned(payload: CommentUnpinnedPayload): Promise<void> {
+    await this.publish('core.comment.unpinned', payload);
+  }
+
+  async publishUserMentioned(payload: UserMentionedPayload): Promise<void> {
+    await this.publish('core.user.mentioned', payload);
+  }
+
+  async publishHashtagCreated(payload: HashtagCreatedPayload): Promise<void> {
+    await this.publish('core.hashtag.created', payload);
   }
 
   async publishUserFollowed(payload: UserFollowedPayload): Promise<void> {

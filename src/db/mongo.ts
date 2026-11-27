@@ -51,6 +51,8 @@ export interface PostDocument {
   body: string;
   imageKey: string | null;
   imageUrl: string | null;
+  mentions?: string[];
+  hashtags?: string[];
   likeCount: number;
   commentCount: number;
   deleted: boolean;
@@ -76,7 +78,19 @@ export interface CommentDocument {
   replyToUserId?: string | null;
   likeCount?: number;
   replyCount?: number;
+  pinned?: boolean;
+  pinnedAt?: Date | null;
+  editedAt?: Date | null;
+  mentions?: string[];
+  hashtags?: string[];
   deleted: boolean;
+  createdAt: Date;
+}
+
+export interface HashtagDocument {
+  _id: string;
+  tag: string;
+  firstPostId: string;
   createdAt: Date;
 }
 
@@ -197,7 +211,8 @@ export async function connectMongo(url: string = env.MONGO_URL): Promise<{ clien
 
   client = new MongoClient(url, {
     maxPoolSize: 20,
-    minPoolSize: 5,
+    minPoolSize: 1,
+    family: 4,
     serverSelectionTimeoutMS: 5000,
   });
 
@@ -230,6 +245,10 @@ export async function initMongoIndexes(database: Db): Promise<void> {
   await posts.createIndex({ authorId: 1, createdAt: -1 }, { name: 'idx_posts_authorId_createdAt' });
   await posts.createIndex({ createdAt: -1 }, { name: 'idx_posts_createdAt' });
   await posts.createIndex({ deleted: 1, createdAt: -1 }, { name: 'idx_posts_deleted_createdAt' });
+  await posts.createIndex(
+    { hashtags: 1, deleted: 1, createdAt: -1 },
+    { name: 'idx_posts_hashtags_deleted_createdAt' }
+  );
 
   const postLikes = database.collection<PostLikeDocument>('post_likes');
   await postLikes.createIndex({ postId: 1, userId: 1 }, { unique: true, name: 'idx_post_likes_postId_userId_unique' });
@@ -244,6 +263,14 @@ export async function initMongoIndexes(database: Db): Promise<void> {
   await comments.createIndex(
     { postId: 1, parentCommentId: 1, likeCount: -1 },
     { name: 'idx_comments_postId_parent_likeCount' }
+  );
+  await comments.createIndex(
+    { postId: 1, parentCommentId: 1, pinned: -1, pinnedAt: 1, likeCount: -1, createdAt: -1 },
+    { name: 'idx_comments_postId_parent_pinned_top' }
+  );
+  await comments.createIndex(
+    { postId: 1, parentCommentId: 1, pinned: -1, pinnedAt: 1, createdAt: -1 },
+    { name: 'idx_comments_postId_parent_pinned_new' }
   );
   await comments.createIndex({ reelId: 1, createdAt: 1 }, { sparse: true, name: 'idx_comments_reelId_createdAt' });
   await comments.createIndex(
@@ -330,6 +357,53 @@ export async function initMongoIndexes(database: Db): Promise<void> {
   } catch {
     // Ignore migration error if already migrated concurrently
   }
+
+  const hashtags = database.collection<HashtagDocument>('hashtags');
+  await hashtags.createIndex({ createdAt: -1 }, { name: 'idx_hashtags_createdAt' });
+
+  // V4-2 Migration: backfill pinned/editedAt/mentions/hashtags on comments and posts (run once)
+  try {
+    const migrations = database.collection('migrations');
+    const migrationId = 'v4_2_comments_posts_advanced';
+    const migrated = await migrations.findOne({ _id: migrationId as any });
+    if (!migrated) {
+      await comments.updateMany(
+        { pinned: { $exists: false } } as any,
+        { $set: { pinned: false, pinnedAt: null, editedAt: null } } as any
+      );
+      await comments.updateMany(
+        { editedAt: { $exists: false } } as any,
+        { $set: { editedAt: null } } as any
+      );
+      await comments.updateMany(
+        { pinnedAt: { $exists: false } } as any,
+        { $set: { pinnedAt: null } } as any
+      );
+      await comments.updateMany(
+        { mentions: { $exists: false } } as any,
+        { $set: { mentions: [] } } as any
+      );
+      await comments.updateMany(
+        { hashtags: { $exists: false } } as any,
+        { $set: { hashtags: [] } } as any
+      );
+      await posts.updateMany(
+        { mentions: { $exists: false } } as any,
+        { $set: { mentions: [] } } as any
+      );
+      await posts.updateMany(
+        { hashtags: { $exists: false } } as any,
+        { $set: { hashtags: [] } } as any
+      );
+      await migrations.updateOne(
+        { _id: migrationId as any },
+        { $setOnInsert: { _id: migrationId, appliedAt: new Date() } },
+        { upsert: true }
+      );
+    }
+  } catch {
+    // Ignore migration error if already migrated concurrently
+  }
 }
 
 export function getDb(): Db {
@@ -397,6 +471,10 @@ export function getReelsCollection(dbInstance?: Db): Collection<ReelDocument> {
 
 export function getReelLikesCollection(dbInstance?: Db): Collection<ReelLikeDocument> {
   return (dbInstance ?? getDb()).collection<ReelLikeDocument>('reel_likes');
+}
+
+export function getHashtagsCollection(dbInstance?: Db): Collection<HashtagDocument> {
+  return (dbInstance ?? getDb()).collection<HashtagDocument>('hashtags');
 }
 
 export async function runInTransaction<T>(

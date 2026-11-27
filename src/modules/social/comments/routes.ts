@@ -3,10 +3,12 @@ import { authenticateRequest } from '../../../auth/hook.js';
 import { createCommentRateLimiter } from '../../../plugins/rate-limit.js';
 import {
   createCommentSchema,
+  editCommentSchema,
   commentsQuerySchema,
   commentRepliesQuerySchema,
   commentIdParamSchema,
   postIdParamSchema,
+  pinCommentParamSchema,
 } from '../validate.js';
 import { defaultCommentService } from './service.js';
 import { capture } from '../../../lib/analytics.js';
@@ -16,12 +18,21 @@ interface CreateCommentBody {
   parentCommentId?: string | null;
 }
 
+interface EditCommentBody {
+  body: string;
+}
+
 interface PostIdParams {
   id: string;
 }
 
 interface CommentIdParams {
   id: string;
+}
+
+interface PinCommentParams {
+  id: string;
+  commentId: string;
 }
 
 interface CommentsQuery {
@@ -70,6 +81,11 @@ const commentItemSchema = {
     likeCount: { type: 'integer' },
     replyCount: { type: 'integer' },
     likedByViewer: { type: 'boolean' },
+    pinned: { type: 'boolean' },
+    pinnedAt: { type: 'string', nullable: true },
+    editedAt: { type: 'string', nullable: true },
+    mentions: { type: 'array', items: { type: 'string' } },
+    hashtags: { type: 'array', items: { type: 'string' } },
     deleted: { type: 'boolean' },
     createdAt: { type: 'string' },
     author: authorSchema,
@@ -320,7 +336,122 @@ export const commentRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
     }
   );
 
-  // 6. DELETE /comments/:id
+  // 6. PATCH /comments/:id
+  app.patch<{ Params: CommentIdParams; Body: EditCommentBody }>(
+    '/comments/:id',
+    {
+      preHandler: [authenticateRequest],
+      schema: {
+        description: 'Edit a comment (author only, not deleted)',
+        tags: ['Social - Comments'],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+          },
+          required: ['id'],
+        },
+        body: {
+          type: 'object',
+          properties: {
+            body: { type: 'string', minLength: 1, maxLength: 300 },
+          },
+          required: ['body'],
+        },
+        response: {
+          200: commentItemSchema,
+        },
+      },
+    },
+    async (
+      request: FastifyRequest<{ Params: CommentIdParams; Body: EditCommentBody }>,
+      reply: FastifyReply
+    ) => {
+      const viewerId = request.user.userId;
+      const parsedParams = commentIdParamSchema.parse(request.params);
+      const parsedBody = editCommentSchema.parse(request.body);
+      const updated = await defaultCommentService.editComment(
+        viewerId,
+        parsedParams.id,
+        parsedBody.body
+      );
+      return reply.status(200).send(updated);
+    }
+  );
+
+  // 7. POST /posts/:id/comments/:commentId/pin
+  app.post<{ Params: PinCommentParams }>(
+    '/posts/:id/comments/:commentId/pin',
+    {
+      preHandler: [authenticateRequest],
+      schema: {
+        description: 'Pin a comment to the top of a post (post author only, max 3)',
+        tags: ['Social - Comments'],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            commentId: { type: 'string' },
+          },
+          required: ['id', 'commentId'],
+        },
+        response: {
+          204: {
+            type: 'null',
+            description: 'Comment pinned',
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: PinCommentParams }>, reply: FastifyReply) => {
+      const viewerId = request.user.userId;
+      const parsedParams = pinCommentParamSchema.parse(request.params);
+      await defaultCommentService.pinComment(
+        viewerId,
+        parsedParams.id,
+        parsedParams.commentId
+      );
+      return reply.status(204).send();
+    }
+  );
+
+  // 8. DELETE /posts/:id/comments/:commentId/pin
+  app.delete<{ Params: PinCommentParams }>(
+    '/posts/:id/comments/:commentId/pin',
+    {
+      preHandler: [authenticateRequest],
+      schema: {
+        description: 'Unpin a comment from a post (post author only)',
+        tags: ['Social - Comments'],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            commentId: { type: 'string' },
+          },
+          required: ['id', 'commentId'],
+        },
+        response: {
+          204: {
+            type: 'null',
+            description: 'Comment unpinned',
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: PinCommentParams }>, reply: FastifyReply) => {
+      const viewerId = request.user.userId;
+      const parsedParams = pinCommentParamSchema.parse(request.params);
+      await defaultCommentService.unpinComment(
+        viewerId,
+        parsedParams.id,
+        parsedParams.commentId
+      );
+      return reply.status(204).send();
+    }
+  );
+
+  // 9. DELETE /comments/:id
   app.delete<{ Params: CommentIdParams }>(
     '/comments/:id',
     {

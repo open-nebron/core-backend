@@ -13,6 +13,7 @@ import {
   getDb,
   getMongoClient,
   runInTransaction,
+  type PostDocument,
   type ProfileDocument,
 } from '../../../db/mongo.js';
 import {
@@ -25,6 +26,7 @@ import {
 import { computePublicUrl, isValidUserKey, headObject, deleteObject, ACCEPTED_IMAGE_TYPES } from '../../../lib/r2.js';
 import { env } from '../../../config/env.js';
 import { sanitizePostBody } from '../validate.js';
+import { resolveAndRecordTokens, emitTokenEvents } from '../tokens.js';
 
 export interface AuthorSummary {
   userId: string;
@@ -38,6 +40,8 @@ export interface PostResponse {
   body: string;
   imageKey?: string | null;
   imageUrl?: string | null;
+  mentions: string[];
+  hashtags: string[];
   likeCount: number;
   commentCount: number;
   likedByViewer: boolean;
@@ -45,6 +49,18 @@ export interface PostResponse {
   createdAt: string;
   updatedAt?: string;
   author: AuthorSummary;
+}
+
+export interface HashtagPostsResponse {
+  tag: string;
+  postCount: number;
+  data: PostResponse[];
+  hasMore: boolean;
+}
+
+export interface TrendingHashtagItem {
+  tag: string;
+  postCount: number;
 }
 
 export class PostService {
@@ -132,6 +148,14 @@ export class PostService {
       finalImageUrl = computePublicUrl(imageKey);
     }
 
+    const { mentions, hashtags } = await resolveAndRecordTokens({
+      body,
+      authorId,
+      contentType: 'post',
+      db: this.customDb,
+      emitEvents: false,
+    });
+
     const now = new Date();
     let createdPost: any;
 
@@ -142,6 +166,8 @@ export class PostService {
           body,
           imageKey: finalImageKey,
           imageUrl: finalImageUrl,
+          mentions,
+          hashtags,
           likeCount: 0,
           commentCount: 0,
           deleted: false,
@@ -153,21 +179,36 @@ export class PostService {
       await this.repo.incrementProfilePostCount(authorId, session);
     });
 
+    const postIdStr = createdPost._id.toString();
     await this.publisher.publishPostCreated({
-      postId: createdPost._id.toString(),
+      postId: postIdStr,
       authorId,
       body,
       hasImage: Boolean(finalImageKey),
       createdAt: now.toISOString(),
     });
 
+    await emitTokenEvents({
+      mentions,
+      hashtags,
+      body,
+      authorId,
+      contentType: 'post',
+      contentId: postIdStr,
+      contextPostId: postIdStr,
+      db: this.customDb,
+      publisher: this.publisher,
+    });
+
     const authorProfile = await this.getProfilesCol().findOne({ userId: authorId });
 
     return {
-      id: createdPost._id.toString(),
+      id: postIdStr,
       body: createdPost.body,
       imageKey: finalImageKey,
       imageUrl: finalImageUrl,
+      mentions,
+      hashtags,
       likeCount: 0,
       commentCount: 0,
       likedByViewer: false,
@@ -180,6 +221,61 @@ export class PostService {
         avatarUrl: authorProfile ? computePublicUrl(authorProfile.avatarKey, authorProfile.updatedAt) : null,
       },
     };
+  }
+
+  private async formatPostsList(
+    viewerId: string,
+    posts: PostDocument[],
+    options: { excludeBanned?: boolean; likedAllTrue?: boolean } = {}
+  ): Promise<PostResponse[]> {
+    if (posts.length === 0) return [];
+
+    const authorIds = Array.from(new Set(posts.map((p) => p.authorId)));
+    const profiles = await this.getProfilesCol()
+      .find({ userId: { $in: authorIds } })
+      .toArray();
+
+    const profileMap = new Map<string, ProfileDocument>();
+    for (const pr of profiles) {
+      profileMap.set(pr.userId, pr);
+    }
+
+    const filteredPosts = options.excludeBanned
+      ? posts.filter((p) => !profileMap.get(p.authorId)?.isBanned)
+      : posts;
+    if (filteredPosts.length === 0) return [];
+
+    const postIds = filteredPosts.map((p) => p._id);
+    const [likedSet, commentsMap] = await Promise.all([
+      options.likedAllTrue
+        ? Promise.resolve(new Set(postIds.map((id) => id.toString())))
+        : this.likeRepo.hasLikedBatch(viewerId, postIds),
+      this.commentService.getBatchRecentPreview(postIds, viewerId, 3),
+    ]);
+
+    return filteredPosts.map((p) => {
+      const authorProfile = profileMap.get(p.authorId);
+      return {
+        id: p._id.toString(),
+        body: p.body,
+        imageKey: p.imageKey ?? null,
+        imageUrl: p.imageUrl ?? null,
+        mentions: p.mentions ?? [],
+        hashtags: p.hashtags ?? [],
+        likeCount: p.likeCount ?? 0,
+        commentCount: p.commentCount ?? 0,
+        likedByViewer: options.likedAllTrue ? true : likedSet.has(p._id.toString()),
+        comments: commentsMap.get(p._id.toString()) || [],
+        createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : new Date(p.createdAt).toISOString(),
+        updatedAt: p.updatedAt instanceof Date ? p.updatedAt.toISOString() : new Date(p.updatedAt).toISOString(),
+        author: {
+          userId: p.authorId,
+          username: authorProfile?.username || 'unknown',
+          name: authorProfile?.name ?? null,
+          avatarUrl: authorProfile ? computePublicUrl(authorProfile.avatarKey, authorProfile.updatedAt) : null,
+        },
+      };
+    });
   }
 
   async getUserPosts(
@@ -195,32 +291,7 @@ export class PostService {
 
     const beforeDate = before ? new Date(before) : undefined;
     const posts = await this.repo.getUserPosts(targetUserId, limit, beforeDate);
-    if (posts.length === 0) return [];
-
-    const postIds = posts.map((p) => p._id);
-    const likedSet = await this.likeRepo.hasLikedBatch(viewerId, postIds);
-    const commentsMap = await this.commentService.getBatchRecentPreview(postIds, viewerId, 3);
-
-    const authorProfile = await this.getProfilesCol().findOne({ userId: targetUserId });
-    const authorSummary: AuthorSummary = {
-      userId: targetUserId,
-      username: authorProfile?.username || 'unknown',
-      name: authorProfile?.name ?? null,
-      avatarUrl: authorProfile ? computePublicUrl(authorProfile.avatarKey, authorProfile.updatedAt) : null,
-    };
-
-    return posts.map((p) => ({
-      id: p._id.toString(),
-      body: p.body,
-      imageKey: p.imageKey ?? null,
-      imageUrl: p.imageUrl ?? null,
-      likeCount: p.likeCount ?? 0,
-      commentCount: p.commentCount ?? 0,
-      likedByViewer: likedSet.has(p._id.toString()),
-      comments: commentsMap.get(p._id.toString()) || [],
-      createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : new Date(p.createdAt).toISOString(),
-      author: authorSummary,
-    }));
+    return this.formatPostsList(viewerId, posts);
   }
 
   async getPost(viewerId: string, postIdStr: string): Promise<PostResponse> {
@@ -245,6 +316,8 @@ export class PostService {
       body: post.body,
       imageKey: post.imageKey ?? null,
       imageUrl: post.imageUrl ?? null,
+      mentions: post.mentions ?? [],
+      hashtags: post.hashtags ?? [],
       likeCount: post.likeCount ?? 0,
       commentCount: post.commentCount ?? 0,
       likedByViewer: !!liked,
@@ -328,42 +401,7 @@ export class PostService {
       return { data: [], hasMore: false };
     }
 
-    const postIds = posts.map((p) => p._id);
-    const likedSet = await this.likeRepo.hasLikedBatch(viewerId, postIds);
-
-    const authorIds = Array.from(new Set(posts.map((p) => p.authorId)));
-    const profiles = await this.getProfilesCol()
-      .find({ userId: { $in: authorIds } })
-      .toArray();
-
-    const profileMap = new Map<string, ProfileDocument>();
-    for (const p of profiles) {
-      profileMap.set(p.userId, p);
-    }
-
-    const commentsMap = await this.commentService.getBatchRecentPreview(postIds, viewerId, 3);
-
-    const data: PostResponse[] = posts.map((p) => {
-      const authorProfile = profileMap.get(p.authorId);
-      return {
-        id: p._id.toString(),
-        body: p.body,
-        imageKey: p.imageKey ?? null,
-        imageUrl: p.imageUrl ?? null,
-        likeCount: p.likeCount ?? 0,
-        commentCount: p.commentCount ?? 0,
-        likedByViewer: likedSet.has(p._id.toString()),
-        comments: commentsMap.get(p._id.toString()) || [],
-        createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : new Date(p.createdAt).toISOString(),
-        author: {
-          userId: p.authorId,
-          username: authorProfile?.username || 'unknown',
-          name: authorProfile?.name ?? null,
-          avatarUrl: authorProfile ? computePublicUrl(authorProfile.avatarKey, authorProfile.updatedAt) : null,
-        },
-      };
-    });
-
+    const data = await this.formatPostsList(viewerId, posts);
     return { data, hasMore };
   }
 
@@ -390,11 +428,25 @@ export class PostService {
       throw new BadRequestError('At least one of body or removeImage must be provided', 'invalid_request');
     }
 
+    let tokenFields: { mentions?: string[]; hashtags?: string[] } = {};
+    if (patch.body !== undefined) {
+      tokenFields = await resolveAndRecordTokens({
+        body: patch.body,
+        authorId: viewerId,
+        contentType: 'post',
+        db: this.customDb,
+        emitEvents: false,
+      });
+    }
+
     if (patch.removeImage && post.imageKey) {
       await deleteObject(post.imageKey).catch(() => {});
     }
 
-    const updated = await this.repo.updatePost(postId, patch);
+    const updated = await this.repo.updatePost(postId, {
+      ...patch,
+      ...tokenFields,
+    });
     if (!updated) {
       throw new NotFoundError('Post not found', 'post_not_found');
     }
@@ -407,6 +459,21 @@ export class PostService {
       at: (updated.updatedAt || new Date()).toISOString(),
     });
 
+    if (patch.body !== undefined && tokenFields.mentions && tokenFields.hashtags) {
+      await emitTokenEvents({
+        mentions: tokenFields.mentions,
+        hashtags: tokenFields.hashtags,
+        body: updated.body,
+        authorId: viewerId,
+        contentType: 'post',
+        contentId: postIdStr,
+        contextPostId: postIdStr,
+        db: this.customDb,
+        publisher: this.publisher,
+        previousMentions: post.mentions ?? [],
+      });
+    }
+
     const liked = await this.likeRepo.findLike(postId, viewerId);
     const authorProfile = await this.getProfilesCol().findOne({ userId: post.authorId });
     const commentsPreview = await this.commentService.getRecentPreview(postId, viewerId, 3);
@@ -416,6 +483,8 @@ export class PostService {
       body: updated.body,
       imageKey: updated.imageKey ?? null,
       imageUrl: updated.imageUrl ?? null,
+      mentions: updated.mentions ?? [],
+      hashtags: updated.hashtags ?? [],
       likeCount: updated.likeCount ?? 0,
       commentCount: updated.commentCount ?? 0,
       likedByViewer: !!liked,
@@ -442,44 +511,7 @@ export class PostService {
       .filter((p) => !blockedIds.has(p.authorId))
       .slice(0, limit);
 
-    if (allowedPosts.length === 0) return [];
-
-    const postIds = allowedPosts.map((p) => p._id);
-    const likedSet = await this.likeRepo.hasLikedBatch(viewerId, postIds);
-
-    const allowedAuthorIds = Array.from(new Set(allowedPosts.map((p) => p.authorId)));
-    const profiles = await this.getProfilesCol()
-      .find({ userId: { $in: allowedAuthorIds } })
-      .toArray();
-
-    const profileMap = new Map<string, ProfileDocument>();
-    for (const p of profiles) {
-      profileMap.set(p.userId, p);
-    }
-
-    const commentsMap = await this.commentService.getBatchRecentPreview(postIds, viewerId, 3);
-
-    return allowedPosts.map((p) => {
-      const authorProfile = profileMap.get(p.authorId);
-      return {
-        id: p._id.toString(),
-        body: p.body,
-        imageKey: p.imageKey ?? null,
-        imageUrl: p.imageUrl ?? null,
-        likeCount: p.likeCount ?? 0,
-        commentCount: p.commentCount ?? 0,
-        likedByViewer: likedSet.has(p._id.toString()),
-        comments: commentsMap.get(p._id.toString()) || [],
-        createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : new Date(p.createdAt).toISOString(),
-        updatedAt: p.updatedAt instanceof Date ? p.updatedAt.toISOString() : new Date(p.updatedAt).toISOString(),
-        author: {
-          userId: p.authorId,
-          username: authorProfile?.username || 'unknown',
-          name: authorProfile?.name ?? null,
-          avatarUrl: authorProfile ? computePublicUrl(authorProfile.avatarKey, authorProfile.updatedAt) : null,
-        },
-      };
-    });
+    return this.formatPostsList(viewerId, allowedPosts);
   }
 
   async getViewerLikedPosts(
@@ -514,42 +546,44 @@ export class PostService {
       .filter((p) => !blockedIds.has(p.authorId))
       .slice(0, limit);
 
-    if (allowedPosts.length === 0) return [];
+    return this.formatPostsList(viewerId, allowedPosts, { likedAllTrue: true });
+  }
 
-    const allowedPostIds = allowedPosts.map((p) => p._id);
-    const allowedAuthorIds = Array.from(new Set(allowedPosts.map((p) => p.authorId)));
-    const profiles = await this.getProfilesCol()
-      .find({ userId: { $in: allowedAuthorIds } })
-      .toArray();
+  async getPostsByHashtag(
+    viewerId: string,
+    rawTag: string,
+    limit: number = 20,
+    before?: string
+  ): Promise<HashtagPostsResponse> {
+    const tag = rawTag.replace(/^#/, '').trim().toLowerCase();
+    const blockedIds = await getBlockedUserIds(viewerId, undefined, this.customDb);
+    const excluded = Array.from(blockedIds);
+    const beforeDate = before ? new Date(before) : undefined;
 
-    const profileMap = new Map<string, ProfileDocument>();
-    for (const p of profiles) {
-      profileMap.set(p.userId, p);
-    }
+    const [rawPosts, postCount] = await Promise.all([
+      this.repo.getPostsByHashtag(tag, limit + 1, beforeDate, excluded),
+      this.repo.countPostsByHashtag(tag, excluded),
+    ]);
 
-    const commentsMap = await this.commentService.getBatchRecentPreview(allowedPostIds, viewerId, 3);
+    const hasMore = rawPosts.length > limit;
+    const posts = hasMore ? rawPosts.slice(0, limit) : rawPosts;
+    const data = await this.formatPostsList(viewerId, posts, { excludeBanned: true });
 
-    return allowedPosts.map((p) => {
-      const authorProfile = profileMap.get(p.authorId);
-      return {
-        id: p._id.toString(),
-        body: p.body,
-        imageKey: p.imageKey ?? null,
-        imageUrl: p.imageUrl ?? null,
-        likeCount: p.likeCount ?? 0,
-        commentCount: p.commentCount ?? 0,
-        likedByViewer: true,
-        comments: commentsMap.get(p._id.toString()) || [],
-        createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : new Date(p.createdAt).toISOString(),
-        updatedAt: p.updatedAt instanceof Date ? p.updatedAt.toISOString() : new Date(p.updatedAt).toISOString(),
-        author: {
-          userId: p.authorId,
-          username: authorProfile?.username || 'unknown',
-          name: authorProfile?.name ?? null,
-          avatarUrl: authorProfile ? computePublicUrl(authorProfile.avatarKey, authorProfile.updatedAt) : null,
-        },
-      };
-    });
+    return {
+      tag,
+      postCount,
+      data,
+      hasMore,
+    };
+  }
+
+  async getTrendingHashtags(
+    viewerId: string,
+    limit: number = 10
+  ): Promise<TrendingHashtagItem[]> {
+    const blockedIds = await getBlockedUserIds(viewerId, undefined, this.customDb);
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    return this.repo.getTrendingHashtags(sevenDaysAgo, limit, Array.from(blockedIds));
   }
 }
 

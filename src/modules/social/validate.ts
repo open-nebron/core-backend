@@ -103,3 +103,38 @@ export const userLikesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20),
   before: z.string().datetime().optional(),
 });
+
+export const editCommentSchema = z.object({
+  body: z
+    .string()
+    .transform((val) => sanitizePostBody(val))
+    .refine((val) => val.length >= 1, {
+      message: 'Comment body must not be empty',
+    })
+    .refine((val) => val.length <= 300, {
+      message: 'Comment body cannot exceed 300 characters',
+    }),
+});
+
+export const pinCommentParamSchema = z.object({
+  id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid post ID format'),
+  commentId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid comment ID format'),
+});
+
+export const hashtagParamSchema = z.object({
+  tag: z
+    .string()
+    .transform((val) => val.replace(/^#/, '').trim().toLowerCase())
+    .refine((val) => /^[a-z0-9_]{1,50}$/.test(val), {
+      message: 'Invalid hashtag format',
+    }),
+});
+
+export const hashtagPostsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  before: z.string().datetime().optional(),
+});
+
+export const trendingHashtagsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+});

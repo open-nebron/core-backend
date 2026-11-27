@@ -45,6 +45,11 @@ export class CommentRepository {
       replyToUserId: null,
       likeCount: 0,
       replyCount: 0,
+      pinned: false,
+      pinnedAt: null,
+      editedAt: null,
+      mentions: [],
+      hashtags: [],
       ...comment,
     };
     const res = await this.getCollection().insertOne(doc as any, { session });
@@ -63,13 +68,67 @@ export class CommentRepository {
     session?: ClientSession,
     placeholderBody?: string
   ): Promise<boolean> {
-    const update: Record<string, unknown> = { deleted: true };
+    const update: Record<string, unknown> = {
+      deleted: true,
+      pinned: false,
+      pinnedAt: null,
+    };
     if (placeholderBody !== undefined) {
       update.body = placeholderBody;
     }
     const res = await this.getCollection().updateOne(
       { _id: commentId },
       { $set: update },
+      { session }
+    );
+    return res.modifiedCount > 0;
+  }
+
+  async editCommentBody(
+    commentId: ObjectId,
+    body: string,
+    editedAt: Date,
+    mentions: string[],
+    hashtags: string[]
+  ): Promise<CommentDocument | null> {
+    return this.getCollection().findOneAndUpdate(
+      { _id: commentId, deleted: false },
+      {
+        $set: {
+          body,
+          editedAt,
+          mentions,
+          hashtags,
+        },
+      },
+      { returnDocument: 'after' }
+    );
+  }
+
+  async countPinnedComments(
+    postId: ObjectId,
+    session?: ClientSession
+  ): Promise<number> {
+    return this.getCollection().countDocuments(
+      {
+        postId,
+        parentCommentId: null,
+        pinned: true,
+        deleted: false,
+      },
+      { session }
+    );
+  }
+
+  async setPinned(
+    commentId: ObjectId,
+    pinned: boolean,
+    pinnedAt: Date | null,
+    session?: ClientSession
+  ): Promise<boolean> {
+    const res = await this.getCollection().updateOne(
+      { _id: commentId, deleted: false },
+      { $set: { pinned, pinnedAt } },
       { session }
     );
     return res.modifiedCount > 0;
@@ -238,12 +297,13 @@ export class CommentRepository {
     };
     if (before) {
       filter.createdAt = { $lt: before };
+      filter.pinned = { $ne: true };
     }
 
     const sortSpec: Record<string, 1 | -1> =
       sort === 'new'
-        ? { createdAt: -1, _id: -1 }
-        : { likeCount: -1, createdAt: -1, _id: -1 };
+        ? { pinned: -1, pinnedAt: 1, createdAt: -1, _id: -1 }
+        : { pinned: -1, pinnedAt: 1, likeCount: -1, createdAt: -1, _id: -1 };
 
     return this.getCollection()
       .find(filter)

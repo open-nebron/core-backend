@@ -22,9 +22,11 @@ import {
   BlockedError,
   ForbiddenError,
   BadRequestError,
+  NotPostAuthorError,
 } from '../../../utils/errors.js';
 import { computePublicUrl } from '../../../lib/r2.js';
 import { sanitizePostBody } from '../validate.js';
+import { resolveAndRecordTokens, emitTokenEvents } from '../tokens.js';
 
 export interface CommentAuthor {
   userId: string;
@@ -57,6 +59,11 @@ export interface CommentResponse {
   likeCount: number;
   replyCount: number;
   likedByViewer: boolean;
+  pinned?: boolean;
+  pinnedAt?: string | null;
+  editedAt?: string | null;
+  mentions?: string[];
+  hashtags?: string[];
   deleted?: boolean;
   createdAt: string;
   author: CommentAuthor;
@@ -290,6 +297,14 @@ export class CommentService {
         ? await this.resolveParentForReply(viewerId, rawParentCommentId.trim(), target)
         : null;
 
+    const { mentions, hashtags } = await resolveAndRecordTokens({
+      body,
+      authorId: viewerId,
+      contentType: targetType === 'reel' ? 'reel' : 'comment',
+      db: this.customDb,
+      emitEvents: false,
+    });
+
     const now = new Date();
     let createdComment!: CommentDocument;
 
@@ -304,6 +319,11 @@ export class CommentService {
           replyToUserId: parentInfo ? parentInfo.replyToUserId : null,
           likeCount: 0,
           replyCount: 0,
+          pinned: false,
+          pinnedAt: null,
+          editedAt: null,
+          mentions,
+          hashtags,
           deleted: false,
           createdAt: now,
         },
@@ -319,6 +339,19 @@ export class CommentService {
       } else {
         await this.repo.incrementReelCommentCount(target.targetId, session);
       }
+    });
+
+    const targetIdString = target.targetId.toString();
+    await emitTokenEvents({
+      mentions,
+      hashtags,
+      body,
+      authorId: viewerId,
+      contentType: targetType === 'reel' ? 'reel' : 'comment',
+      contentId: createdComment._id.toString(),
+      contextPostId: targetIdString,
+      db: this.customDb,
+      publisher: this.publisher,
     });
 
     const profileIds = [viewerId];
@@ -365,6 +398,11 @@ export class CommentService {
       likeCount: 0,
       replyCount: 0,
       likedByViewer: false,
+      pinned: false,
+      pinnedAt: null,
+      editedAt: null,
+      mentions,
+      hashtags,
       deleted: false,
       createdAt: now.toISOString(),
       author: this.formatAuthor(profileMap.get(viewerId), viewerId),
@@ -372,7 +410,6 @@ export class CommentService {
       ...(parentPreview ? { parent: parentPreview } : {}),
     };
 
-    const targetIdString = target.targetId.toString();
     const createdPayload = {
       commentId: response.id,
       postId: targetIdString,
@@ -480,6 +517,11 @@ export class CommentService {
       likeCount: doc.likeCount ?? 0,
       replyCount: doc.replyCount ?? 0,
       likedByViewer: likedSet.has(idStr),
+      pinned: Boolean(doc.pinned),
+      pinnedAt: doc.pinnedAt ? this.toIsoString(doc.pinnedAt) : null,
+      editedAt: doc.editedAt ? this.toIsoString(doc.editedAt) : null,
+      mentions: doc.deleted ? [] : (doc.mentions ?? []),
+      hashtags: doc.deleted ? [] : (doc.hashtags ?? []),
       deleted: Boolean(doc.deleted),
       createdAt: this.toIsoString(doc.createdAt),
       author,
@@ -837,6 +879,211 @@ export class CommentService {
         parentCommentId: comment.parentCommentId ? comment.parentCommentId.toString() : null,
         keepPlaceholder,
       }
+    );
+  }
+
+  async editComment(
+    viewerId: string,
+    commentIdStr: string,
+    rawBody: string
+  ): Promise<CommentResponse> {
+    const commentId = this.parseObjectId(commentIdStr, 'Comment');
+
+    const body = sanitizePostBody(rawBody);
+    if (!body || body.length < 1) {
+      throw new BadRequestError('Comment body must not be empty', 'empty_body');
+    }
+    if (body.length > 300) {
+      throw new BadRequestError('Comment body cannot exceed 300 characters', 'body_too_long');
+    }
+
+    const comment = await this.repo.getCommentById(commentId);
+    if (!comment) {
+      throw new NotFoundError('Comment not found', 'comment_not_found');
+    }
+
+    if (comment.authorId !== viewerId) {
+      throw new ForbiddenError(
+        'You do not have permission to edit this comment',
+        'not_comment_author'
+      );
+    }
+
+    if (comment.deleted) {
+      throw new BadRequestError('Cannot edit deleted comment', 'deleted');
+    }
+
+    const isReelComment =
+      comment.targetType === 'reel' || (Boolean(comment.reelId) && !comment.postId);
+    const targetType: 'post' | 'reel' = isReelComment ? 'reel' : 'post';
+    const rawTargetId = (isReelComment ? comment.reelId : comment.postId) as ObjectId;
+    const target = await this.resolveTarget(viewerId, targetType, rawTargetId.toString());
+
+    const { mentions, hashtags } = await resolveAndRecordTokens({
+      body,
+      authorId: viewerId,
+      contentType: targetType === 'reel' ? 'reel' : 'comment',
+      db: this.customDb,
+      emitEvents: false,
+    });
+
+    const now = new Date();
+    const updated = await this.repo.editCommentBody(commentId, body, now, mentions, hashtags);
+    if (!updated) {
+      throw new BadRequestError('Cannot edit deleted comment', 'deleted');
+    }
+
+    const targetIdStr = target.targetId.toString();
+    const updatedPayload = {
+      commentId: updated._id.toString(),
+      postId: targetIdStr,
+      body: updated.body,
+      editedAt: now.toISOString(),
+    };
+    await this.publisher.publishCommentUpdated(updatedPayload);
+
+    await emitTokenEvents({
+      mentions,
+      hashtags,
+      body: updated.body,
+      authorId: viewerId,
+      contentType: targetType === 'reel' ? 'reel' : 'comment',
+      contentId: updated._id.toString(),
+      contextPostId: targetIdStr,
+      db: this.customDb,
+      publisher: this.publisher,
+      previousMentions: comment.mentions ?? [],
+    });
+
+    const profileIds = [viewerId];
+    if (updated.replyToUserId) profileIds.push(updated.replyToUserId);
+    const [profileMap, likedSet] = await Promise.all([
+      this.fetchProfileMap(Array.from(new Set(profileIds))),
+      this.repo.hasLikedCommentsBatch(viewerId, [commentId]),
+    ]);
+
+    const response = this.formatDocResponse(
+      updated,
+      targetType,
+      targetIdStr,
+      profileMap,
+      likedSet,
+      new Set()
+    );
+
+    await this.notifyCommentWsRecipients(
+      target,
+      viewerId,
+      'core.comment.updated',
+      {
+        ...updatedPayload,
+        targetType,
+        ...(isReelComment ? { reelId: targetIdStr } : {}),
+        mentions,
+        hashtags,
+        comment: response,
+      }
+    );
+
+    return response;
+  }
+
+  async pinComment(
+    viewerId: string,
+    postIdStr: string,
+    commentIdStr: string
+  ): Promise<void> {
+    const postId = this.parseObjectId(postIdStr, 'Post');
+    const commentId = this.parseObjectId(commentIdStr, 'Comment');
+
+    const post = await this.postRepo.getPostById(postId);
+    if (!post || post.deleted) {
+      throw new NotFoundError('Post not found', 'post_not_found');
+    }
+
+    if (post.authorId !== viewerId) {
+      throw new NotPostAuthorError();
+    }
+
+    const comment = await this.repo.getCommentById(commentId);
+    if (!comment || comment.deleted || comment.postId?.toString() !== postIdStr) {
+      throw new NotFoundError('Comment not found', 'comment_not_found');
+    }
+
+    if (comment.parentCommentId) {
+      throw new BadRequestError('Only top-level comments can be pinned', 'cannot_pin_reply');
+    }
+
+    if (comment.pinned) {
+      return;
+    }
+
+    const pinnedCount = await this.repo.countPinnedComments(postId);
+    if (pinnedCount >= 3) {
+      throw new BadRequestError('Maximum of 3 pinned comments allowed per post', 'max_pinned');
+    }
+
+    const now = new Date();
+    await this.repo.setPinned(commentId, true, now);
+
+    const payload = {
+      commentId: commentIdStr,
+      postId: postIdStr,
+      by: viewerId,
+      at: now.toISOString(),
+    };
+    await this.publisher.publishCommentPinned(payload);
+
+    await this.notifyCommentWsRecipients(
+      { targetType: 'post', targetId: postId, ownerId: post.authorId },
+      viewerId,
+      'core.comment.pinned',
+      payload
+    );
+  }
+
+  async unpinComment(
+    viewerId: string,
+    postIdStr: string,
+    commentIdStr: string
+  ): Promise<void> {
+    const postId = this.parseObjectId(postIdStr, 'Post');
+    const commentId = this.parseObjectId(commentIdStr, 'Comment');
+
+    const post = await this.postRepo.getPostById(postId);
+    if (!post || post.deleted) {
+      throw new NotFoundError('Post not found', 'post_not_found');
+    }
+
+    if (post.authorId !== viewerId) {
+      throw new NotPostAuthorError();
+    }
+
+    const comment = await this.repo.getCommentById(commentId);
+    if (!comment || comment.deleted || comment.postId?.toString() !== postIdStr) {
+      throw new NotFoundError('Comment not found', 'comment_not_found');
+    }
+
+    if (!comment.pinned) {
+      return;
+    }
+
+    const now = new Date();
+    await this.repo.setPinned(commentId, false, null);
+
+    const payload = {
+      commentId: commentIdStr,
+      postId: postIdStr,
+      by: viewerId,
+      at: now.toISOString(),
+    };
+    await this.publisher.publishCommentUnpinned(payload);
+
+    await this.notifyCommentWsRecipients(
+      { targetType: 'post', targetId: postId, ownerId: post.authorId },
+      viewerId,
+      'core.comment.unpinned',
+      payload
     );
   }
 
