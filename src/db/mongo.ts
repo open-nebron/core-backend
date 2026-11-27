@@ -55,6 +55,8 @@ export interface PostDocument {
   hashtags?: string[];
   likeCount: number;
   commentCount: number;
+  saveCount?: number;
+  shareCount?: number;
   deleted: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -78,6 +80,8 @@ export interface CommentDocument {
   replyToUserId?: string | null;
   likeCount?: number;
   replyCount?: number;
+  saveCount?: number;
+  shareCount?: number;
   pinned?: boolean;
   pinnedAt?: Date | null;
   editedAt?: Date | null;
@@ -85,6 +89,27 @@ export interface CommentDocument {
   hashtags?: string[];
   deleted: boolean;
   createdAt: Date;
+}
+
+export interface SavedPostDocument {
+  _id?: any;
+  userId: string;
+  postId: any;
+  savedAt: Date;
+}
+
+export interface SavedReelDocument {
+  _id?: any;
+  userId: string;
+  reelId: any;
+  savedAt: Date;
+}
+
+export interface SavedCommentDocument {
+  _id?: any;
+  userId: string;
+  commentId: any;
+  savedAt: Date;
 }
 
 export interface HashtagDocument {
@@ -187,6 +212,8 @@ export interface ReelDocument {
   viewCount: number;
   likeCount: number;
   commentCount: number;
+  saveCount?: number;
+  shareCount?: number;
   deleted: boolean;
   deletedAt?: Date | null;
   r2DeletedAt?: Date | null;
@@ -404,6 +431,47 @@ export async function initMongoIndexes(database: Db): Promise<void> {
   } catch {
     // Ignore migration error if already migrated concurrently
   }
+
+  // V4-3 Collections & Migration: saved_posts, saved_reels, saved_comments + saveCount/shareCount
+  const savedPosts = database.collection<SavedPostDocument>('saved_posts');
+  await savedPosts.createIndex({ userId: 1, savedAt: -1 }, { name: 'idx_saved_posts_userId_savedAt' });
+  await savedPosts.createIndex({ userId: 1, postId: 1 }, { unique: true, name: 'idx_saved_posts_userId_postId_unique' });
+
+  const savedReels = database.collection<SavedReelDocument>('saved_reels');
+  await savedReels.createIndex({ userId: 1, savedAt: -1 }, { name: 'idx_saved_reels_userId_savedAt' });
+  await savedReels.createIndex({ userId: 1, reelId: 1 }, { unique: true, name: 'idx_saved_reels_userId_reelId_unique' });
+
+  const savedComments = database.collection<SavedCommentDocument>('saved_comments');
+  await savedComments.createIndex({ userId: 1, savedAt: -1 }, { name: 'idx_saved_comments_userId_savedAt' });
+  await savedComments.createIndex(
+    { userId: 1, commentId: 1 },
+    { unique: true, name: 'idx_saved_comments_userId_commentId_unique' }
+  );
+
+  try {
+    const migrations = database.collection('migrations');
+    const migrationId = 'v4_3_saves_and_shares';
+    const migrated = await migrations.findOne({ _id: migrationId as any });
+    if (!migrated) {
+      for (const col of [posts, reels, comments]) {
+        await col.updateMany(
+          { saveCount: { $exists: false } } as any,
+          { $set: { saveCount: 0 } } as any
+        );
+        await col.updateMany(
+          { shareCount: { $exists: false } } as any,
+          { $set: { shareCount: 0 } } as any
+        );
+      }
+      await migrations.updateOne(
+        { _id: migrationId as any },
+        { $setOnInsert: { _id: migrationId, appliedAt: new Date() } },
+        { upsert: true }
+      );
+    }
+  } catch {
+    // Ignore migration error if already migrated concurrently
+  }
 }
 
 export function getDb(): Db {
@@ -475,6 +543,18 @@ export function getReelLikesCollection(dbInstance?: Db): Collection<ReelLikeDocu
 
 export function getHashtagsCollection(dbInstance?: Db): Collection<HashtagDocument> {
   return (dbInstance ?? getDb()).collection<HashtagDocument>('hashtags');
+}
+
+export function getSavedPostsCollection(dbInstance?: Db): Collection<SavedPostDocument> {
+  return (dbInstance ?? getDb()).collection<SavedPostDocument>('saved_posts');
+}
+
+export function getSavedReelsCollection(dbInstance?: Db): Collection<SavedReelDocument> {
+  return (dbInstance ?? getDb()).collection<SavedReelDocument>('saved_reels');
+}
+
+export function getSavedCommentsCollection(dbInstance?: Db): Collection<SavedCommentDocument> {
+  return (dbInstance ?? getDb()).collection<SavedCommentDocument>('saved_comments');
 }
 
 export async function runInTransaction<T>(

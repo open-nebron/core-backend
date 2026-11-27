@@ -11,6 +11,8 @@ import { followRoutes } from './modules/social/follows/routes.js';
 import { postRoutes } from './modules/social/posts/routes.js';
 import { commentRoutes } from './modules/social/comments/routes.js';
 import { hashtagRoutes } from './modules/social/hashtags/routes.js';
+import { saveRoutes } from './modules/social/saves/routes.js';
+import { shareRoutes } from './modules/social/share/routes.js';
 import { userRoutes } from './modules/users/user.routes.js';
 import { reportRoutes } from './modules/reports/reports.routes.js';
 import { storyRoutes } from './modules/stories/stories.routes.js';
@@ -84,6 +86,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(postRoutes);
   await app.register(commentRoutes);
   await app.register(hashtagRoutes);
+  await app.register(saveRoutes);
+  await app.register(shareRoutes);
   await app.register(userRoutes);
   await app.register(reportRoutes);
   await app.register(storyRoutes);

@@ -12,6 +12,7 @@ const envSchema = z
     EVENTS_STREAM: z.string().default('nebron.events'),
     EVENTS_GROUP: z.string().default('core-api'),
     ALLOWED_ORIGINS: z.string().default('http://localhost:3000,http://localhost:8081'),
+    PUBLIC_WEB_URL: z.string().optional(),
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
     LOG_LEVEL: z.string().default('info'),
 

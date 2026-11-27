@@ -27,6 +27,7 @@ import {
   NotFoundError,
 } from '../../utils/errors.js';
 import { FollowRepository, defaultFollowRepository } from '../social/follows/repository.js';
+import { SaveRepository, defaultSaveRepository } from '../social/saves/repository.js';
 import { getBlockedUserIds, isBlockedPair } from '../social/block-filter.js';
 import { SocialEventPublisher, defaultSocialEventPublisher } from '../social/events.js';
 import { REEL_VIEWS_BUFFER_KEY } from '../../jobs/reel-jobs.js';
@@ -50,7 +51,11 @@ export interface ReelResponse {
   viewCount: number;
   likeCount: number;
   commentCount: number;
+  saveCount: number;
+  shareCount: number;
   likedByMe: boolean;
+  savedByViewer: boolean;
+  savedAt?: string;
   createdAt: string;
   updatedAt: string;
   author: ReelAuthorResponse;
@@ -91,6 +96,7 @@ function decodeCursor(cursor: string): { createdAt: Date; id: ObjectId } {
 
 export class ReelsService {
   private followRepo: FollowRepository;
+  private saveRepo: SaveRepository;
   private publisher: SocialEventPublisher;
   private customDb?: Db;
   private customClient?: MongoClient;
@@ -101,9 +107,11 @@ export class ReelsService {
     publisher?: SocialEventPublisher,
     customDb?: Db,
     customClient?: MongoClient,
-    customRedis?: Redis
+    customRedis?: Redis,
+    saveRepo?: SaveRepository
   ) {
     this.followRepo = followRepo ?? (customDb ? new FollowRepository(customDb) : defaultFollowRepository);
+    this.saveRepo = saveRepo ?? (customDb ? new SaveRepository(customDb) : defaultSaveRepository);
     this.publisher = publisher ?? defaultSocialEventPublisher;
     this.customDb = customDb;
     this.customClient = customClient;
@@ -158,18 +166,19 @@ export class ReelsService {
     return map;
   }
 
-  private async enrichReels(docs: ReelDocument[], viewerId: string): Promise<ReelResponse[]> {
+  public async enrichReels(docs: ReelDocument[], viewerId: string): Promise<ReelResponse[]> {
     if (docs.length === 0) return [];
 
     const reelIds = docs.map((d) => d._id as ObjectId);
     const reelIdStrings = reelIds.map((id) => id.toString());
     const authorIds = Array.from(new Set(docs.map((d) => d.authorId)));
 
-    const [profiles, likedDocs, followingSet, bufferedViews] = await Promise.all([
+    const [profiles, likedDocs, savedSet, followingSet, bufferedViews] = await Promise.all([
       this.getProfilesCol().find({ userId: { $in: authorIds } }).toArray(),
       this.getReelLikesCol()
         .find({ userId: viewerId, reelId: { $in: reelIds } }, { projection: { reelId: 1 } })
         .toArray(),
+      this.saveRepo.hasSavedBatch('reel', viewerId, reelIds),
       this.followRepo.isFollowingBatch(viewerId, authorIds.filter((id) => id !== viewerId)),
       this.getBufferedViewsMap(reelIdStrings),
     ]);
@@ -197,7 +206,10 @@ export class ReelsService {
         viewCount: (doc.viewCount ?? 0) + (bufferedViews.get(id) ?? 0),
         likeCount: doc.likeCount ?? 0,
         commentCount: doc.commentCount ?? 0,
+        saveCount: doc.saveCount ?? 0,
+        shareCount: doc.shareCount ?? 0,
         likedByMe: likedSet.has(id),
+        savedByViewer: savedSet.has(id),
         createdAt: createdAt.toISOString(),
         updatedAt: updatedAt.toISOString(),
         author: {
@@ -307,6 +319,8 @@ export class ReelsService {
       viewCount: 0,
       likeCount: 0,
       commentCount: 0,
+      saveCount: 0,
+      shareCount: 0,
       deleted: false,
       deletedAt: null,
       r2DeletedAt: null,

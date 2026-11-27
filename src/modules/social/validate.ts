@@ -138,3 +138,13 @@ export const hashtagPostsQuerySchema = z.object({
 export const trendingHashtagsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(10),
 });
+
+export const savedListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  before: z.string().datetime().optional(),
+});
+
+export const shareContentSchema = z.object({
+  contentType: z.enum(['post', 'reel', 'comment']),
+  contentId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid content ID format'),
+});

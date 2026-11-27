@@ -114,6 +114,49 @@ export interface HashtagCreatedPayload {
   at: string;
 }
 
+export interface PostSavedPayload {
+  postId: string;
+  userId: string;
+  at: string;
+}
+
+export interface PostUnsavedPayload {
+  postId: string;
+  userId: string;
+  at: string;
+}
+
+export interface ReelSavedPayload {
+  reelId: string;
+  userId: string;
+  at: string;
+}
+
+export interface ReelUnsavedPayload {
+  reelId: string;
+  userId: string;
+  at: string;
+}
+
+export interface CommentSavedPayload {
+  commentId: string;
+  userId: string;
+  at: string;
+}
+
+export interface CommentUnsavedPayload {
+  commentId: string;
+  userId: string;
+  at: string;
+}
+
+export interface ContentSharedPayload {
+  contentType: 'post' | 'reel' | 'comment';
+  contentId: string;
+  byUserId: string;
+  at: string;
+}
+
 export interface UserFollowedPayload {
   followerId: string;
   followingId: string;
@@ -281,6 +324,34 @@ export class SocialEventPublisher {
 
   async publishReelViewed(payload: ReelViewedPayload): Promise<void> {
     await this.publish('core.reel.viewed', payload);
+  }
+
+  async publishPostSaved(payload: PostSavedPayload): Promise<void> {
+    await this.publish('core.post.saved', payload);
+  }
+
+  async publishPostUnsaved(payload: PostUnsavedPayload): Promise<void> {
+    await this.publish('core.post.unsaved', payload);
+  }
+
+  async publishReelSaved(payload: ReelSavedPayload): Promise<void> {
+    await this.publish('core.reel.saved', payload);
+  }
+
+  async publishReelUnsaved(payload: ReelUnsavedPayload): Promise<void> {
+    await this.publish('core.reel.unsaved', payload);
+  }
+
+  async publishCommentSaved(payload: CommentSavedPayload): Promise<void> {
+    await this.publish('core.comment.saved', payload);
+  }
+
+  async publishCommentUnsaved(payload: CommentUnsavedPayload): Promise<void> {
+    await this.publish('core.comment.unsaved', payload);
+  }
+
+  async publishContentShared(payload: ContentSharedPayload): Promise<void> {
+    await this.publish('core.content.shared', payload);
   }
 
   async publishWsToUsers(userIds: string[], type: string, payload: unknown): Promise<void> {

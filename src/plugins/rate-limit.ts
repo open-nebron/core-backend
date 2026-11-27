@@ -185,3 +185,10 @@ export const createReelRateLimiter = createRedisRateLimiter({
   keyPrefix: 'ratelimit:reels_create',
   keyGenerator: userKeyGen,
 });
+
+export const shareRateLimiter = createRedisRateLimiter({
+  limit: 30,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:share',
+  keyGenerator: userKeyGen,
+});

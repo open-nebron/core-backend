@@ -214,7 +214,10 @@ export const postRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
                     hashtags: { type: 'array', items: { type: 'string' } },
                     likeCount: { type: 'integer' },
                     commentCount: { type: 'integer' },
+                    saveCount: { type: 'integer' },
+                    shareCount: { type: 'integer' },
                     likedByViewer: { type: 'boolean' },
+                    savedByViewer: { type: 'boolean' },
                     createdAt: { type: 'string' },
                     author: {
                       type: 'object',
@@ -276,7 +279,10 @@ export const postRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
               hashtags: { type: 'array', items: { type: 'string' } },
               likeCount: { type: 'integer' },
               commentCount: { type: 'integer' },
+              saveCount: { type: 'integer' },
+              shareCount: { type: 'integer' },
               likedByViewer: { type: 'boolean' },
+              savedByViewer: { type: 'boolean' },
               createdAt: { type: 'string' },
               author: {
                 type: 'object',

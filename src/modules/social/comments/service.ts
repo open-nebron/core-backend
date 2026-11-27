@@ -2,6 +2,7 @@ import { ObjectId, type Db, type MongoClient } from 'mongodb';
 import { CommentRepository, defaultCommentRepository, type CommentSortOrder } from './repository.js';
 import { PostRepository, defaultPostRepository } from '../posts/repository.js';
 import { FollowRepository, defaultFollowRepository } from '../follows/repository.js';
+import { SaveRepository, defaultSaveRepository } from '../saves/repository.js';
 import {
   SocialEventPublisher,
   defaultSocialEventPublisher,
@@ -58,7 +59,11 @@ export interface CommentResponse {
   body: string;
   likeCount: number;
   replyCount: number;
+  saveCount: number;
+  shareCount: number;
   likedByViewer: boolean;
+  savedByViewer: boolean;
+  savedAt?: string;
   pinned?: boolean;
   pinnedAt?: string | null;
   editedAt?: string | null;
@@ -92,6 +97,7 @@ export class CommentService {
   private repo: CommentRepository;
   private postRepo: PostRepository;
   private followRepo: FollowRepository;
+  private saveRepo: SaveRepository;
   private publisher: SocialEventPublisher;
   private customDb?: Db;
   private customClient?: MongoClient;
@@ -102,11 +108,13 @@ export class CommentService {
     publisher?: SocialEventPublisher,
     customDb?: Db,
     customClient?: MongoClient,
-    followRepo?: FollowRepository
+    followRepo?: FollowRepository,
+    saveRepo?: SaveRepository
   ) {
     this.repo = repo ?? (customDb ? new CommentRepository(customDb) : defaultCommentRepository);
     this.postRepo = postRepo ?? (customDb ? new PostRepository(customDb) : defaultPostRepository);
     this.followRepo = followRepo ?? (customDb ? new FollowRepository(customDb) : defaultFollowRepository);
+    this.saveRepo = saveRepo ?? (customDb ? new SaveRepository(customDb) : defaultSaveRepository);
     this.publisher = publisher ?? defaultSocialEventPublisher;
     this.customDb = customDb;
     this.customClient = customClient;
@@ -319,6 +327,8 @@ export class CommentService {
           replyToUserId: parentInfo ? parentInfo.replyToUserId : null,
           likeCount: 0,
           replyCount: 0,
+          saveCount: 0,
+          shareCount: 0,
           pinned: false,
           pinnedAt: null,
           editedAt: null,
@@ -397,7 +407,10 @@ export class CommentService {
       body: createdComment.body,
       likeCount: 0,
       replyCount: 0,
+      saveCount: 0,
+      shareCount: 0,
       likedByViewer: false,
+      savedByViewer: false,
       pinned: false,
       pinnedAt: null,
       editedAt: null,
@@ -488,7 +501,8 @@ export class CommentService {
     profileMap: Map<string, ProfileDocument>,
     likedSet: Set<string>,
     blockedIds: Set<string>,
-    topReplies?: CommentResponse[]
+    topReplies?: CommentResponse[],
+    savedSet?: Set<string>
   ): CommentResponse {
     const idStr = doc._id.toString();
     const isBlockedPlaceholder = Boolean(doc.deleted && blockedIds.has(doc.authorId));
@@ -516,7 +530,10 @@ export class CommentService {
       body: doc.deleted ? '[deleted]' : doc.body,
       likeCount: doc.likeCount ?? 0,
       replyCount: doc.replyCount ?? 0,
+      saveCount: doc.saveCount ?? 0,
+      shareCount: doc.shareCount ?? 0,
       likedByViewer: likedSet.has(idStr),
+      savedByViewer: savedSet ? savedSet.has(idStr) : false,
       pinned: Boolean(doc.pinned),
       pinnedAt: doc.pinnedAt ? this.toIsoString(doc.pinnedAt) : null,
       editedAt: doc.editedAt ? this.toIsoString(doc.editedAt) : null,
@@ -595,13 +612,16 @@ export class CommentService {
         commentIdsForLikes.push(r._id);
       }
     }
-    const likedSet = await this.repo.hasLikedCommentsBatch(viewerId, commentIdsForLikes);
+    const [likedSet, savedSet] = await Promise.all([
+      this.repo.hasLikedCommentsBatch(viewerId, commentIdsForLikes),
+      this.saveRepo.hasSavedBatch('comment', viewerId, commentIdsForLikes),
+    ]);
 
     const tid = target.targetId.toString();
     return filteredParents.map((c) => {
       const childDocs = repliesByParent.get(c._id.toString()) || [];
       const topReplies = childDocs.map((r) =>
-        this.formatDocResponse(r, targetType, tid, profileMap, likedSet, blockedIds)
+        this.formatDocResponse(r, targetType, tid, profileMap, likedSet, blockedIds, undefined, savedSet)
       );
       return this.formatDocResponse(
         c,
@@ -610,7 +630,8 @@ export class CommentService {
         profileMap,
         likedSet,
         blockedIds,
-        topReplies
+        topReplies,
+        savedSet
       );
     });
   }
@@ -682,14 +703,15 @@ export class CommentService {
     const visibleReplies = unblocked.filter((r) => !profileMap.get(r.authorId)?.isBanned);
     if (visibleReplies.length === 0) return [];
 
-    const likedSet = await this.repo.hasLikedCommentsBatch(
-      viewerId,
-      visibleReplies.map((r) => r._id)
-    );
+    const visibleIds = visibleReplies.map((r) => r._id);
+    const [likedSet, savedSet] = await Promise.all([
+      this.repo.hasLikedCommentsBatch(viewerId, visibleIds),
+      this.saveRepo.hasSavedBatch('comment', viewerId, visibleIds),
+    ]);
 
     const tid = target.targetId.toString();
     return visibleReplies.map((r) =>
-      this.formatDocResponse(r, target.targetType, tid, profileMap, likedSet, blockedIds)
+      this.formatDocResponse(r, target.targetType, tid, profileMap, likedSet, blockedIds, undefined, savedSet)
     );
   }
 
@@ -957,9 +979,10 @@ export class CommentService {
 
     const profileIds = [viewerId];
     if (updated.replyToUserId) profileIds.push(updated.replyToUserId);
-    const [profileMap, likedSet] = await Promise.all([
+    const [profileMap, likedSet, savedSet] = await Promise.all([
       this.fetchProfileMap(Array.from(new Set(profileIds))),
       this.repo.hasLikedCommentsBatch(viewerId, [commentId]),
+      this.saveRepo.hasSavedBatch('comment', viewerId, [commentId]),
     ]);
 
     const response = this.formatDocResponse(
@@ -968,7 +991,9 @@ export class CommentService {
       targetIdStr,
       profileMap,
       likedSet,
-      new Set()
+      new Set(),
+      undefined,
+      savedSet
     );
 
     await this.notifyCommentWsRecipients(
@@ -1169,15 +1194,16 @@ export class CommentService {
     if (filtered.length === 0) return [];
 
     const allowedAuthors = Array.from(new Set(filtered.map((c) => c.authorId)));
-    const profileMap = await this.fetchProfileMap(allowedAuthors);
-    const likedSet = await this.repo.hasLikedCommentsBatch(
-      viewerId,
-      filtered.map((c) => c._id)
-    );
+    const commentIds = filtered.map((c) => c._id);
+    const [profileMap, likedSet, savedSet] = await Promise.all([
+      this.fetchProfileMap(allowedAuthors),
+      this.repo.hasLikedCommentsBatch(viewerId, commentIds),
+      this.saveRepo.hasSavedBatch('comment', viewerId, commentIds),
+    ]);
 
     const pid = postId.toString();
     return filtered.map((c) =>
-      this.formatDocResponse(c, 'post', pid, profileMap, likedSet, blockedIds)
+      this.formatDocResponse(c, 'post', pid, profileMap, likedSet, blockedIds, undefined, savedSet)
     );
   }
 
@@ -1202,9 +1228,10 @@ export class CommentService {
     const blockedIds = await getBlockedUserIds(viewerId, Array.from(allAuthorIds), this.customDb);
     const allowedAuthorIds = Array.from(allAuthorIds).filter((id) => !blockedIds.has(id));
 
-    const [profileMap, likedSet] = await Promise.all([
+    const [profileMap, likedSet, savedSet] = await Promise.all([
       this.fetchProfileMap(allowedAuthorIds),
       this.repo.hasLikedCommentsBatch(viewerId, allCommentIds),
+      this.saveRepo.hasSavedBatch('comment', viewerId, allCommentIds),
     ]);
 
     for (const [pid, list] of map.entries()) {
@@ -1212,12 +1239,47 @@ export class CommentService {
       result.set(
         pid,
         filtered.map((c) =>
-          this.formatDocResponse(c, 'post', pid, profileMap, likedSet, blockedIds)
+          this.formatDocResponse(c, 'post', pid, profileMap, likedSet, blockedIds, undefined, savedSet)
         )
       );
     }
 
     return result;
+  }
+
+  public async formatSavedComments(
+    viewerId: string,
+    docs: CommentDocument[]
+  ): Promise<CommentResponse[]> {
+    if (docs.length === 0) return [];
+    const profileIds = Array.from(
+      new Set([
+        ...docs.map((d) => d.authorId),
+        ...docs.map((d) => d.replyToUserId).filter((id): id is string => Boolean(id)),
+      ])
+    );
+    const commentIds = docs.map((d) => d._id);
+    const [profileMap, likedSet, savedSet] = await Promise.all([
+      this.fetchProfileMap(profileIds),
+      this.repo.hasLikedCommentsBatch(viewerId, commentIds),
+      Promise.resolve(new Set(commentIds.map((id) => id.toString()))),
+    ]);
+
+    const emptyBlocked = new Set<string>();
+    return docs.map((doc) => {
+      const isReel = doc.targetType === 'reel' || (Boolean(doc.reelId) && !doc.postId);
+      const targetIdStr = (isReel ? doc.reelId : doc.postId)?.toString() ?? '';
+      return this.formatDocResponse(
+        doc,
+        isReel ? 'reel' : 'post',
+        targetIdStr,
+        profileMap,
+        likedSet,
+        emptyBlocked,
+        undefined,
+        savedSet
+      );
+    });
   }
 }
 

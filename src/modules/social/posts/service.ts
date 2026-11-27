@@ -2,6 +2,7 @@ import { ObjectId, type Db, type MongoClient } from 'mongodb';
 import { PostRepository, defaultPostRepository } from './repository.js';
 import { PostLikeRepository, defaultPostLikeRepository } from '../likes/repository.js';
 import { FollowRepository, defaultFollowRepository } from '../follows/repository.js';
+import { SaveRepository, defaultSaveRepository } from '../saves/repository.js';
 import { CommentService, defaultCommentService, type CommentResponse } from '../comments/service.js';
 import {
   SocialEventPublisher,
@@ -44,7 +45,11 @@ export interface PostResponse {
   hashtags: string[];
   likeCount: number;
   commentCount: number;
+  saveCount: number;
+  shareCount: number;
   likedByViewer: boolean;
+  savedByViewer: boolean;
+  savedAt?: string;
   comments?: CommentResponse[];
   createdAt: string;
   updatedAt?: string;
@@ -67,6 +72,7 @@ export class PostService {
   private repo: PostRepository;
   private likeRepo: PostLikeRepository;
   private followRepo: FollowRepository;
+  private saveRepo: SaveRepository;
   private commentService: CommentService;
   private publisher: SocialEventPublisher;
   private customDb?: Db;
@@ -79,12 +85,14 @@ export class PostService {
     commentService?: CommentService,
     publisher?: SocialEventPublisher,
     customDb?: Db,
-    customClient?: MongoClient
+    customClient?: MongoClient,
+    saveRepo?: SaveRepository
   ) {
     this.repo = repo ?? (customDb ? new PostRepository(customDb) : defaultPostRepository);
     this.likeRepo = likeRepo ?? (customDb ? new PostLikeRepository(customDb) : defaultPostLikeRepository);
     this.followRepo = followRepo ?? (customDb ? new FollowRepository(customDb) : defaultFollowRepository);
-    this.commentService = commentService ?? (customDb ? new CommentService(undefined, undefined, undefined, customDb, customClient) : defaultCommentService);
+    this.saveRepo = saveRepo ?? (customDb ? new SaveRepository(customDb) : defaultSaveRepository);
+    this.commentService = commentService ?? (customDb ? new CommentService(undefined, undefined, undefined, customDb, customClient, undefined, this.saveRepo) : defaultCommentService);
     this.publisher = publisher ?? defaultSocialEventPublisher;
     this.customDb = customDb;
     this.customClient = customClient;
@@ -170,6 +178,8 @@ export class PostService {
           hashtags,
           likeCount: 0,
           commentCount: 0,
+          saveCount: 0,
+          shareCount: 0,
           deleted: false,
           createdAt: now,
           updatedAt: now,
@@ -211,7 +221,10 @@ export class PostService {
       hashtags,
       likeCount: 0,
       commentCount: 0,
+      saveCount: 0,
+      shareCount: 0,
       likedByViewer: false,
+      savedByViewer: false,
       comments: [],
       createdAt: now.toISOString(),
       author: {
@@ -223,10 +236,10 @@ export class PostService {
     };
   }
 
-  private async formatPostsList(
+  public async formatPostsList(
     viewerId: string,
     posts: PostDocument[],
-    options: { excludeBanned?: boolean; likedAllTrue?: boolean } = {}
+    options: { excludeBanned?: boolean; likedAllTrue?: boolean; savedAllTrue?: boolean } = {}
   ): Promise<PostResponse[]> {
     if (posts.length === 0) return [];
 
@@ -246,17 +259,21 @@ export class PostService {
     if (filteredPosts.length === 0) return [];
 
     const postIds = filteredPosts.map((p) => p._id);
-    const [likedSet, commentsMap] = await Promise.all([
+    const [likedSet, savedSet, commentsMap] = await Promise.all([
       options.likedAllTrue
         ? Promise.resolve(new Set(postIds.map((id) => id.toString())))
         : this.likeRepo.hasLikedBatch(viewerId, postIds),
+      options.savedAllTrue
+        ? Promise.resolve(new Set(postIds.map((id) => id.toString())))
+        : this.saveRepo.hasSavedBatch('post', viewerId, postIds),
       this.commentService.getBatchRecentPreview(postIds, viewerId, 3),
     ]);
 
     return filteredPosts.map((p) => {
       const authorProfile = profileMap.get(p.authorId);
+      const pid = p._id.toString();
       return {
-        id: p._id.toString(),
+        id: pid,
         body: p.body,
         imageKey: p.imageKey ?? null,
         imageUrl: p.imageUrl ?? null,
@@ -264,8 +281,11 @@ export class PostService {
         hashtags: p.hashtags ?? [],
         likeCount: p.likeCount ?? 0,
         commentCount: p.commentCount ?? 0,
-        likedByViewer: options.likedAllTrue ? true : likedSet.has(p._id.toString()),
-        comments: commentsMap.get(p._id.toString()) || [],
+        saveCount: p.saveCount ?? 0,
+        shareCount: p.shareCount ?? 0,
+        likedByViewer: options.likedAllTrue ? true : likedSet.has(pid),
+        savedByViewer: options.savedAllTrue ? true : savedSet.has(pid),
+        comments: commentsMap.get(pid) || [],
         createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : new Date(p.createdAt).toISOString(),
         updatedAt: p.updatedAt instanceof Date ? p.updatedAt.toISOString() : new Date(p.updatedAt).toISOString(),
         author: {
@@ -307,9 +327,12 @@ export class PostService {
       throw new BlockedError();
     }
 
-    const liked = await this.likeRepo.findLike(postId, viewerId);
-    const authorProfile = await this.getProfilesCol().findOne({ userId: post.authorId });
-    const commentsPreview = await this.commentService.getRecentPreview(postId, viewerId, 3);
+    const [liked, saved, authorProfile, commentsPreview] = await Promise.all([
+      this.likeRepo.findLike(postId, viewerId),
+      this.saveRepo.hasSaved('post', viewerId, postId),
+      this.getProfilesCol().findOne({ userId: post.authorId }),
+      this.commentService.getRecentPreview(postId, viewerId, 3),
+    ]);
 
     return {
       id: post._id.toString(),
@@ -320,7 +343,10 @@ export class PostService {
       hashtags: post.hashtags ?? [],
       likeCount: post.likeCount ?? 0,
       commentCount: post.commentCount ?? 0,
+      saveCount: post.saveCount ?? 0,
+      shareCount: post.shareCount ?? 0,
       likedByViewer: !!liked,
+      savedByViewer: saved,
       comments: commentsPreview,
       createdAt: post.createdAt instanceof Date ? post.createdAt.toISOString() : new Date(post.createdAt).toISOString(),
       author: {
@@ -474,9 +500,12 @@ export class PostService {
       });
     }
 
-    const liked = await this.likeRepo.findLike(postId, viewerId);
-    const authorProfile = await this.getProfilesCol().findOne({ userId: post.authorId });
-    const commentsPreview = await this.commentService.getRecentPreview(postId, viewerId, 3);
+    const [liked, saved, authorProfile, commentsPreview] = await Promise.all([
+      this.likeRepo.findLike(postId, viewerId),
+      this.saveRepo.hasSaved('post', viewerId, postId),
+      this.getProfilesCol().findOne({ userId: post.authorId }),
+      this.commentService.getRecentPreview(postId, viewerId, 3),
+    ]);
 
     return {
       id: updated._id.toString(),
@@ -487,7 +516,10 @@ export class PostService {
       hashtags: updated.hashtags ?? [],
       likeCount: updated.likeCount ?? 0,
       commentCount: updated.commentCount ?? 0,
+      saveCount: updated.saveCount ?? 0,
+      shareCount: updated.shareCount ?? 0,
       likedByViewer: !!liked,
+      savedByViewer: saved,
       comments: commentsPreview,
       createdAt: updated.createdAt instanceof Date ? updated.createdAt.toISOString() : new Date(updated.createdAt).toISOString(),
       updatedAt: updated.updatedAt instanceof Date ? updated.updatedAt.toISOString() : new Date(updated.updatedAt).toISOString(),
