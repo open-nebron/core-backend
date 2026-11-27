@@ -59,10 +59,17 @@ export const createCommentSchema = z.object({
     .refine((val) => val.length <= 300, {
       message: 'Comment body cannot exceed 300 characters',
     }),
+  parentCommentId: z.string().nullable().optional(),
 });
 
 export const commentsQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).default(30),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  before: z.string().datetime().optional(),
+  sort: z.enum(['top', 'new']).default('top'),
+});
+
+export const commentRepliesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
   before: z.string().datetime().optional(),
 });
 

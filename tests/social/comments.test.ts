@@ -442,7 +442,7 @@ describe('Social - Media & Comments Module (Stage 7C)', () => {
       });
     }
 
-    // Page 1: limit 2
+    // Page 1: limit 2 (default sort=top DESC -> Comment 4, Comment 3)
     const res1 = await app.inject({
       method: 'GET',
       url: `/posts/${pId}/comments?limit=2`,
@@ -451,11 +451,11 @@ describe('Social - Media & Comments Module (Stage 7C)', () => {
     expect(res1.statusCode).toBe(200);
     const page1 = res1.json();
     expect(page1.length).toBe(2);
-    expect(page1[0].body).toBe('Comment 0');
-    expect(page1[1].body).toBe('Comment 1');
+    expect(page1[0].body).toBe('Comment 4');
+    expect(page1[1].body).toBe('Comment 3');
 
-    // Page 2: before date of comment 4, limit 2
-    const beforeDate = new Date(baseTime + 4 * 1000).toISOString();
+    // Page 2: before date of comment 3, limit 2 -> Comment 2, Comment 1
+    const beforeDate = new Date(baseTime + 3 * 1000).toISOString();
     const res2 = await app.inject({
       method: 'GET',
       url: `/posts/${pId}/comments?limit=2&before=${encodeURIComponent(beforeDate)}`,
@@ -464,7 +464,707 @@ describe('Social - Media & Comments Module (Stage 7C)', () => {
     expect(res2.statusCode).toBe(200);
     const page2 = res2.json();
     expect(page2.length).toBe(2);
-    expect(page2[0].body).toBe('Comment 0');
+    expect(page2[0].body).toBe('Comment 2');
     expect(page2[1].body).toBe('Comment 1');
+  });
+
+  // =========================================================================
+  // V4-1: Threaded comments & comment likes (17 tests)
+  // =========================================================================
+
+  async function resetRateLimitsForTestUsers() {
+    const keys = [
+      ...(await redis.keys(`ratelimit:*:${userA}:*`)),
+      ...(await redis.keys(`ratelimit:*:${userB}:*`)),
+      ...(await redis.keys(`ratelimit:*:${userC}:*`)),
+    ];
+    if (keys.length > 0) await redis.del(...keys);
+  }
+
+  async function createFreshDiscussionPost(title: string): Promise<string> {
+    await resetRateLimitsForTestUsers();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/posts',
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { body: title },
+    });
+    expect(res.statusCode).toBe(201);
+    return res.json().id as string;
+  }
+
+  it('13. Reply to top-level comment -> parent.replyCount++', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 13 post');
+    const rootRes = await app.inject({
+      method: 'POST',
+      url: `/posts/${postId}/comments`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { body: 'Root comment' },
+    });
+    expect(rootRes.statusCode).toBe(201);
+    const root = rootRes.json();
+
+    const streamBefore = await redis.xrevrange('nebron.events', '+', '-', 'COUNT', 1);
+    const lastId = streamBefore[0]?.[0] || '0-0';
+
+    const replyRes = await app.inject({
+      method: 'POST',
+      url: `/posts/${postId}/comments`,
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { body: 'Direct reply to root', parentCommentId: root.id },
+    });
+    expect(replyRes.statusCode).toBe(201);
+    const reply = replyRes.json();
+    expect(reply.parentCommentId).toBe(root.id);
+    expect(reply.replyToUserId).toBeNull();
+    expect(reply.parent?.id).toBe(root.id);
+
+    const rootDoc = await db.collection('comments').findOne({ _id: new ObjectId(root.id) });
+    expect(rootDoc?.replyCount).toBe(1);
+
+    const events = await redis.xrange('nebron.events', `(${lastId}`, '+');
+    expect(
+      events.some(([, fields]) => {
+        const idx = fields.indexOf('type');
+        return idx !== -1 && fields[idx + 1] === 'core.comment.replied';
+      })
+    ).toBe(true);
+  });
+
+  it('14. Reply to reply in two-level mode -> flattened to root parent, replyToUserId set correctly', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 14 post');
+    await db.collection('relationships').deleteMany({ fromUserId: userA, toUserId: userC });
+    await redis.del(`rel:blocked:${userA}`, `rel:blocked:${userC}`);
+
+    const rootId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+        payload: { body: 'Root' },
+      })
+    ).json().id;
+
+    const reply1Id = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenB}` },
+        payload: { body: 'Bob reply', parentCommentId: rootId },
+      })
+    ).json().id;
+
+    const reply2Res = await app.inject({
+      method: 'POST',
+      url: `/posts/${postId}/comments`,
+      headers: { authorization: `Bearer ${tokenC}` },
+      payload: { body: 'Charlie replying to Bob', parentCommentId: reply1Id },
+    });
+    expect(reply2Res.statusCode).toBe(201);
+    const reply2 = reply2Res.json();
+    expect(reply2.parentCommentId).toBe(rootId);
+    expect(reply2.replyToUserId).toBe(userB);
+    expect(reply2.replyToUser).toEqual({ userId: userB, username: 'bob_c' });
+  });
+
+  it('15. Comment on reply-to-reply does not exceed 2 levels in two-level mode', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 15 post');
+    const rootId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+        payload: { body: 'Root' },
+      })
+    ).json().id;
+
+    const lvl1Id = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenB}` },
+        payload: { body: 'Level 1', parentCommentId: rootId },
+      })
+    ).json().id;
+
+    const lvl2Id = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenC}` },
+        payload: { body: 'Level 2', parentCommentId: lvl1Id },
+      })
+    ).json().id;
+
+    const lvl3Res = await app.inject({
+      method: 'POST',
+      url: `/posts/${postId}/comments`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { body: 'Level 3 reply', parentCommentId: lvl2Id },
+    });
+    expect(lvl3Res.statusCode).toBe(201);
+    const lvl3 = lvl3Res.json();
+    expect(lvl3.parentCommentId).toBe(rootId);
+    expect(lvl3.replyToUserId).toBe(userC);
+    expect(lvl3.replyToUser).toEqual({ userId: userC, username: 'charlie_c' });
+
+    const replies = (
+      await app.inject({
+        method: 'GET',
+        url: `/comments/${rootId}/replies`,
+        headers: { authorization: `Bearer ${tokenA}` },
+      })
+    ).json();
+    expect(replies.length).toBe(3);
+    expect(replies.every((r: any) => r.parentCommentId === rootId)).toBe(true);
+  });
+
+  it('16. Reply to deleted parent -> 400 invalid_parent', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 16 post');
+    const deletedCommentId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenB}` },
+        payload: { body: 'Temp comment' },
+      })
+    ).json().id;
+
+    await app.inject({
+      method: 'DELETE',
+      url: `/comments/${deletedCommentId}`,
+      headers: { authorization: `Bearer ${tokenB}` },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/posts/${postId}/comments`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { body: 'Reply to deleted parent', parentCommentId: deletedCommentId },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('invalid_parent');
+  });
+
+  it('17. Reply to wrong-post or malformed parent -> 400 invalid_parent', async () => {
+    const p1Id = await createFreshDiscussionPost('V4-1 test 17 p1');
+    const p2Id = await createFreshDiscussionPost('V4-1 test 17 p2');
+
+    const badRes = await app.inject({
+      method: 'POST',
+      url: `/posts/${p1Id}/comments`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { body: 'Bad parent', parentCommentId: 'not-an-object-id' },
+    });
+    expect(badRes.statusCode).toBe(400);
+    expect(badRes.json().error.code).toBe('invalid_parent');
+
+    const otherPostCommentId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${p2Id}/comments`,
+        headers: { authorization: `Bearer ${tokenB}` },
+        payload: { body: 'Comment on p2' },
+      })
+    ).json().id;
+
+    const crossRes = await app.inject({
+      method: 'POST',
+      url: `/posts/${p1Id}/comments`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { body: 'Cross post reply', parentCommentId: otherPostCommentId },
+    });
+    expect(crossRes.statusCode).toBe(400);
+    expect(crossRes.json().error.code).toBe('invalid_parent');
+  });
+
+  it('18. Like comment -> likeCount++, idempotent', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 18 post');
+    const commentId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+        payload: { body: 'Like me' },
+      })
+    ).json().id;
+
+    const like1 = await app.inject({
+      method: 'POST',
+      url: `/comments/${commentId}/like`,
+      headers: { authorization: `Bearer ${tokenB}` },
+    });
+    expect(like1.statusCode).toBe(204);
+
+    const like2 = await app.inject({
+      method: 'POST',
+      url: `/comments/${commentId}/like`,
+      headers: { authorization: `Bearer ${tokenB}` },
+    });
+    expect(like2.statusCode).toBe(204);
+
+    const list = (
+      await app.inject({
+        method: 'GET',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenB}` },
+      })
+    ).json();
+    expect(list[0].likeCount).toBe(1);
+    expect(list[0].likedByViewer).toBe(true);
+  });
+
+  it('19. Liking own comment allowed', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 19 post');
+    const commentId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+        payload: { body: 'Self like comment' },
+      })
+    ).json().id;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/comments/${commentId}/like`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(res.statusCode).toBe(204);
+
+    const list = (
+      await app.inject({
+        method: 'GET',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+      })
+    ).json();
+    expect(list[0].likeCount).toBe(1);
+    expect(list[0].likedByViewer).toBe(true);
+  });
+
+  it('20. Unlike -> decrement and emits core.comment.unliked', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 20 post');
+    const commentId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+        payload: { body: 'Unlike me' },
+      })
+    ).json().id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/comments/${commentId}/like`,
+      headers: { authorization: `Bearer ${tokenB}` },
+    });
+
+    const streamBefore = await redis.xrevrange('nebron.events', '+', '-', 'COUNT', 1);
+    const lastId = streamBefore[0]?.[0] || '0-0';
+
+    const unlikeRes = await app.inject({
+      method: 'DELETE',
+      url: `/comments/${commentId}/like`,
+      headers: { authorization: `Bearer ${tokenB}` },
+    });
+    expect(unlikeRes.statusCode).toBe(204);
+
+    const list = (
+      await app.inject({
+        method: 'GET',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenB}` },
+      })
+    ).json();
+    expect(list[0].likeCount).toBe(0);
+    expect(list[0].likedByViewer).toBe(false);
+
+    const events = await redis.xrange('nebron.events', `(${lastId}`, '+');
+    expect(
+      events.some(([, fields]) => {
+        const idx = fields.indexOf('type');
+        return idx !== -1 && fields[idx + 1] === 'core.comment.unliked';
+      })
+    ).toBe(true);
+  });
+
+  it('21. Comment like count does not drop below 0 on idempotent unlike', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 21 post');
+    const commentId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+        payload: { body: 'Zero floor comment' },
+      })
+    ).json().id;
+
+    expect(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: `/comments/${commentId}/like`,
+          headers: { authorization: `Bearer ${tokenB}` },
+        })
+      ).statusCode
+    ).toBe(204);
+    expect(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: `/comments/${commentId}/like`,
+          headers: { authorization: `Bearer ${tokenC}` },
+        })
+      ).statusCode
+    ).toBe(204);
+
+    const doc = await db.collection('comments').findOne({ _id: new ObjectId(commentId) });
+    expect(doc?.likeCount).toBe(0);
+  });
+
+  it('22. Top-level comments list sorts top vs new', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 22 post');
+    const olderLikedId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenB}` },
+        payload: { body: 'Older popular' },
+      })
+    ).json().id;
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    const newerZeroId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenC}` },
+        payload: { body: 'Newer zero likes' },
+      })
+    ).json().id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/comments/${olderLikedId}/like`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+
+    const topList = (
+      await app.inject({
+        method: 'GET',
+        url: `/posts/${postId}/comments?sort=top`,
+        headers: { authorization: `Bearer ${tokenA}` },
+      })
+    ).json();
+    expect(topList[0].id).toBe(olderLikedId);
+    expect(topList[1].id).toBe(newerZeroId);
+
+    const newList = (
+      await app.inject({
+        method: 'GET',
+        url: `/posts/${postId}/comments?sort=new`,
+        headers: { authorization: `Bearer ${tokenA}` },
+      })
+    ).json();
+    expect(newList[0].id).toBe(newerZeroId);
+    expect(newList[1].id).toBe(olderLikedId);
+  });
+
+  it('23. topReplies preview (max 3) returned on GET /posts/:id/comments', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 23 post');
+    const rootId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenB}` },
+        payload: { body: 'Parent with 5 replies' },
+      })
+    ).json().id;
+
+    for (let i = 1; i <= 5; i++) {
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+        payload: { body: `Reply #${i}`, parentCommentId: rootId },
+      });
+    }
+
+    const list = (
+      await app.inject({
+        method: 'GET',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+      })
+    ).json();
+    expect(list[0].replyCount).toBe(5);
+    expect(list[0].topReplies.length).toBe(3);
+  });
+
+  it('24. Deleted parent with replies shows "[deleted]" but replies visible', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 24 post');
+    const rootId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenB}` },
+        payload: { body: 'Parent to delete' },
+      })
+    ).json().id;
+
+    const childId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenC}` },
+        payload: { body: 'Still visible reply', parentCommentId: rootId },
+      })
+    ).json().id;
+
+    const delRes = await app.inject({
+      method: 'DELETE',
+      url: `/comments/${rootId}`,
+      headers: { authorization: `Bearer ${tokenB}` },
+    });
+    expect(delRes.statusCode).toBe(204);
+
+    const list = (
+      await app.inject({
+        method: 'GET',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+      })
+    ).json();
+    expect(list.length).toBe(1);
+    expect(list[0].body).toBe('[deleted]');
+    expect(list[0].deleted).toBe(true);
+    expect(list[0].topReplies.some((r: any) => r.id === childId)).toBe(true);
+
+    const repliesRes = await app.inject({
+      method: 'GET',
+      url: `/comments/${rootId}/replies`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(repliesRes.statusCode).toBe(200);
+    expect(repliesRes.json().some((r: any) => r.id === childId)).toBe(true);
+  });
+
+  it('25. Deleted parent without replies removed from list', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 25 post');
+    const commentId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenB}` },
+        payload: { body: 'No replies comment' },
+      })
+    ).json().id;
+
+    expect(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: `/comments/${commentId}`,
+          headers: { authorization: `Bearer ${tokenB}` },
+        })
+      ).statusCode
+    ).toBe(204);
+
+    const list = (
+      await app.inject({
+        method: 'GET',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+      })
+    ).json();
+    expect(list.some((c: any) => c.id === commentId)).toBe(false);
+  });
+
+  it('26. replyCount correct after multiple replies and reply deletions', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 26 post');
+    const rootId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+        payload: { body: 'Counter root' },
+      })
+    ).json().id;
+
+    const r1Id = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenB}` },
+        payload: { body: 'First reply', parentCommentId: rootId },
+      })
+    ).json().id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/posts/${postId}/comments`,
+      headers: { authorization: `Bearer ${tokenC}` },
+      payload: { body: 'Second reply', parentCommentId: rootId },
+    });
+
+    let doc = await db.collection('comments').findOne({ _id: new ObjectId(rootId) });
+    expect(doc?.replyCount).toBe(2);
+
+    await app.inject({
+      method: 'DELETE',
+      url: `/comments/${r1Id}`,
+      headers: { authorization: `Bearer ${tokenB}` },
+    });
+
+    doc = await db.collection('comments').findOne({ _id: new ObjectId(rootId) });
+    expect(doc?.replyCount).toBe(1);
+  });
+
+  it('27. Reply list pagination', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 27 post');
+    const rootId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenB}` },
+        payload: { body: 'Paginated parent' },
+      })
+    ).json().id;
+
+    const base = Date.now() - 10000;
+    const commentsCol = db.collection('comments');
+    for (let i = 0; i < 4; i++) {
+      await commentsCol.insertOne({
+        targetType: 'post',
+        postId: new ObjectId(postId),
+        parentCommentId: new ObjectId(rootId),
+        replyToUserId: null,
+        authorId: userB,
+        body: `Reply ${i}`,
+        likeCount: 0,
+        replyCount: 0,
+        deleted: false,
+        createdAt: new Date(base + i * 1000),
+      });
+    }
+
+    const p1 = (
+      await app.inject({
+        method: 'GET',
+        url: `/comments/${rootId}/replies?limit=2`,
+        headers: { authorization: `Bearer ${tokenA}` },
+      })
+    ).json();
+    expect(p1.length).toBe(2);
+    expect(p1[0].body).toBe('Reply 3');
+    expect(p1[1].body).toBe('Reply 2');
+
+    const p2 = (
+      await app.inject({
+        method: 'GET',
+        url: `/comments/${rootId}/replies?limit=2&before=${encodeURIComponent(p1[1].createdAt)}`,
+        headers: { authorization: `Bearer ${tokenA}` },
+      })
+    ).json();
+    expect(p2.length).toBe(2);
+    expect(p2[0].body).toBe('Reply 1');
+    expect(p2[1].body).toBe('Reply 0');
+  });
+
+  it('28. Block filter in replies and comment lists', async () => {
+    const postId = await createFreshDiscussionPost('V4-1 test 28 post');
+    const rootId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenB}` },
+        payload: { body: 'Shared parent' },
+      })
+    ).json().id;
+
+    const charlieReplyId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenC}` },
+        payload: { body: 'Charlie reply before block', parentCommentId: rootId },
+      })
+    ).json().id;
+
+    const aliceReplyId = (
+      await app.inject({
+        method: 'POST',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+        payload: { body: 'Alice reply', parentCommentId: rootId },
+      })
+    ).json().id;
+
+    // Alice blocks Charlie
+    await db.collection('relationships').insertOne({
+      fromUserId: userA,
+      toUserId: userC,
+      blocked: true,
+      muted: { messages: false, calls: false, until: null },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await redis.del(`rel:blocked:${userA}`, `rel:blocked:${userC}`);
+
+    const replies = (
+      await app.inject({
+        method: 'GET',
+        url: `/comments/${rootId}/replies`,
+        headers: { authorization: `Bearer ${tokenA}` },
+      })
+    ).json();
+    expect(replies.some((r: any) => r.id === charlieReplyId)).toBe(false);
+    expect(replies.some((r: any) => r.id === aliceReplyId)).toBe(true);
+
+    const list = (
+      await app.inject({
+        method: 'GET',
+        url: `/posts/${postId}/comments`,
+        headers: { authorization: `Bearer ${tokenA}` },
+      })
+    ).json();
+    expect(list[0].topReplies.some((r: any) => r.id === charlieReplyId)).toBe(false);
+    expect(list[0].topReplies.some((r: any) => r.id === aliceReplyId)).toBe(true);
+
+    const blockLikeRes = await app.inject({
+      method: 'POST',
+      url: `/comments/${charlieReplyId}/like`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(blockLikeRes.statusCode).toBe(403);
+  });
+
+  it('29. Migration defaults missing V4-1 comment fields once via migrations collection', async () => {
+    const migrationsCol = db.collection('migrations');
+    const migration = await migrationsCol.findOne({ _id: 'v4_1_comments_threading' as any });
+    expect(migration).toBeTruthy();
+
+    const postId = await createFreshDiscussionPost('V4-1 test 29 post');
+    await db.collection('comments').insertOne({
+      postId: new ObjectId(postId),
+      authorId: userB,
+      body: 'Pre-V4 comment',
+      deleted: false,
+      createdAt: new Date(),
+    });
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: `/posts/${postId}/comments`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(listRes.statusCode).toBe(200);
+    expect(listRes.json()[0].body).toBe('Pre-V4 comment');
+    expect(listRes.json()[0].likeCount).toBe(0);
+    expect(listRes.json()[0].replyCount).toBe(0);
+    expect(listRes.json()[0].likedByViewer).toBe(false);
+    expect(listRes.json()[0].parentCommentId).toBeNull();
   });
 });

@@ -60,8 +60,9 @@ export const reelLikesQuerySchema = z.object({
 });
 
 export const reelCommentsQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).default(30),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
   before: z.string().datetime().optional(),
+  sort: z.enum(['top', 'new']).default('top'),
 });
 
 export type ReelConfirmInput = z.infer<typeof reelConfirmSchema>;

@@ -342,12 +342,12 @@ export const reelRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   );
 
   // 11. POST /reels/:id/comments
-  app.post<{ Params: { id: string }; Body: { body: string } }>(
+  app.post<{ Params: { id: string }; Body: { body: string; parentCommentId?: string | null } }>(
     '/reels/:id/comments',
     {
       preHandler: [authenticateRequest, createCommentRateLimiter],
       schema: {
-        description: 'Add a comment to a reel',
+        description: 'Add a top-level comment or reply to a reel',
         tags: ['Reels'],
         params: {
           type: 'object',
@@ -361,6 +361,7 @@ export const reelRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           required: ['body'],
           properties: {
             body: { type: 'string', minLength: 1, maxLength: 300 },
+            parentCommentId: { type: 'string', nullable: true },
           },
         },
       },
@@ -371,23 +372,25 @@ export const reelRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const comment = await defaultCommentService.createReelComment(
         request.user.userId,
         params.id,
-        body.body
+        body.body,
+        body.parentCommentId
       );
       capture(request.user.userId, 'reel_comment_created', {
         reelId: params.id,
         commentId: comment.id,
+        parentCommentId: comment.parentCommentId ?? null,
       });
       return reply.status(201).send(comment);
     }
   );
 
   // 12. GET /reels/:id/comments
-  app.get<{ Params: { id: string }; Querystring: { limit?: number; before?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { limit?: number; before?: string; sort?: 'top' | 'new' } }>(
     '/reels/:id/comments',
     {
       preHandler: [authenticateRequest],
       schema: {
-        description: 'Get comments on a reel in chronological order',
+        description: 'Get top-level comments on a reel with topReplies preview',
         tags: ['Reels'],
         params: {
           type: 'object',
@@ -399,8 +402,9 @@ export const reelRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         querystring: {
           type: 'object',
           properties: {
-            limit: { type: 'integer', minimum: 1, maximum: 50, default: 30 },
+            limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
             before: { type: 'string', format: 'date-time' },
+            sort: { type: 'string', enum: ['top', 'new'], default: 'top' },
           },
         },
       },
@@ -412,7 +416,8 @@ export const reelRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         request.user.userId,
         params.id,
         query.limit,
-        query.before
+        query.before,
+        query.sort
       );
       return reply.status(200).send(comments);
     }

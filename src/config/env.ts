@@ -45,6 +45,7 @@ const envSchema = z
 
     // Decisions & Notifications
     DECISION_REPORTS_NOTIFY: z.enum(['email', 'dashboard']).default('email'),
+    DECISION_COMMENT_THREADING: z.enum(['two-level', 'infinite']).default('two-level'),
     ADMIN_NOTIFICATION_EMAIL: z.string().default('admin@nebron.com'),
     RESEND_API_KEY: z.string().optional(),
   })

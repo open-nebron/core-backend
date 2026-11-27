@@ -53,6 +53,31 @@ export interface CommentDeletedPayload {
   at: string;
 }
 
+export interface CommentRepliedPayload {
+  commentId: string;
+  parentCommentId: string;
+  postId: string;
+  commentAuthorId: string;
+  parentAuthorId: string;
+  at: string;
+}
+
+export interface CommentLikedPayload {
+  commentId: string;
+  postId: string;
+  userId: string;
+  commentAuthorId: string;
+  at: string;
+}
+
+export interface CommentUnlikedPayload {
+  commentId: string;
+  postId: string;
+  userId: string;
+  commentAuthorId: string;
+  at: string;
+}
+
 export interface UserFollowedPayload {
   followerId: string;
   followingId: string;
@@ -156,6 +181,18 @@ export class SocialEventPublisher {
 
   async publishCommentDeleted(payload: CommentDeletedPayload): Promise<void> {
     await this.publish('core.comment.deleted', payload);
+  }
+
+  async publishCommentReplied(payload: CommentRepliedPayload): Promise<void> {
+    await this.publish('core.comment.replied', payload);
+  }
+
+  async publishCommentLiked(payload: CommentLikedPayload): Promise<void> {
+    await this.publish('core.comment.liked', payload);
+  }
+
+  async publishCommentUnliked(payload: CommentUnlikedPayload): Promise<void> {
+    await this.publish('core.comment.unliked', payload);
   }
 
   async publishUserFollowed(payload: UserFollowedPayload): Promise<void> {

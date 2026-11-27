@@ -1,4 +1,4 @@
-import { MongoClient, Db, Collection, ClientSession } from 'mongodb';
+import { MongoClient, Db, Collection, ClientSession, type ObjectId } from 'mongodb';
 import { env } from '../config/env.js';
 
 export type UserTheme = 'light' | 'dark' | 'system';
@@ -72,7 +72,18 @@ export interface CommentDocument {
   reelId?: any;
   authorId: string;
   body: string;
+  parentCommentId?: ObjectId | null;
+  replyToUserId?: string | null;
+  likeCount?: number;
+  replyCount?: number;
   deleted: boolean;
+  createdAt: Date;
+}
+
+export interface CommentLikeDocument {
+  _id?: any;
+  commentId: any;
+  userId: string;
   createdAt: Date;
 }
 
@@ -226,8 +237,35 @@ export async function initMongoIndexes(database: Db): Promise<void> {
 
   const comments = database.collection<CommentDocument>('comments');
   await comments.createIndex({ postId: 1, createdAt: 1 }, { name: 'idx_comments_postId_createdAt' });
+  await comments.createIndex(
+    { postId: 1, parentCommentId: 1, createdAt: 1 },
+    { name: 'idx_comments_postId_parent_createdAt' }
+  );
+  await comments.createIndex(
+    { postId: 1, parentCommentId: 1, likeCount: -1 },
+    { name: 'idx_comments_postId_parent_likeCount' }
+  );
   await comments.createIndex({ reelId: 1, createdAt: 1 }, { sparse: true, name: 'idx_comments_reelId_createdAt' });
+  await comments.createIndex(
+    { reelId: 1, parentCommentId: 1, createdAt: 1 },
+    { sparse: true, name: 'idx_comments_reelId_parent_createdAt' }
+  );
+  await comments.createIndex(
+    { reelId: 1, parentCommentId: 1, likeCount: -1 },
+    { sparse: true, name: 'idx_comments_reelId_parent_likeCount' }
+  );
+  await comments.createIndex(
+    { parentCommentId: 1, createdAt: 1 },
+    { sparse: true, name: 'idx_comments_parentCommentId_createdAt' }
+  );
   await comments.createIndex({ authorId: 1 }, { name: 'idx_comments_authorId' });
+
+  const commentLikes = database.collection<CommentLikeDocument>('comment_likes');
+  await commentLikes.createIndex(
+    { commentId: 1, userId: 1 },
+    { unique: true, name: 'idx_comment_likes_commentId_userId_unique' }
+  );
+  await commentLikes.createIndex({ userId: 1 }, { name: 'idx_comment_likes_userId' });
 
   const follows = database.collection<FollowDocument>('follows');
   await follows.createIndex({ followerId: 1, followingId: 1 }, { unique: true, name: 'idx_follows_follower_following_unique' });
@@ -264,6 +302,34 @@ export async function initMongoIndexes(database: Db): Promise<void> {
   } catch {
     // Ignore migration error if already migrated
   }
+
+  // V4-1 Migration: backfill threading and like counters on comments (run once)
+  try {
+    const migrations = database.collection('migrations');
+    const migrationId = 'v4_1_comments_threading';
+    const migrated = await migrations.findOne({ _id: migrationId as any });
+    if (!migrated) {
+      await comments.updateMany(
+        { parentCommentId: { $exists: false } } as any,
+        { $set: { parentCommentId: null, likeCount: 0, replyCount: 0 } } as any
+      );
+      await comments.updateMany(
+        { likeCount: { $exists: false } } as any,
+        { $set: { likeCount: 0 } } as any
+      );
+      await comments.updateMany(
+        { replyCount: { $exists: false } } as any,
+        { $set: { replyCount: 0 } } as any
+      );
+      await migrations.updateOne(
+        { _id: migrationId as any },
+        { $setOnInsert: { _id: migrationId, appliedAt: new Date() } },
+        { upsert: true }
+      );
+    }
+  } catch {
+    // Ignore migration error if already migrated concurrently
+  }
 }
 
 export function getDb(): Db {
@@ -294,6 +360,10 @@ export function getPostLikesCollection(dbInstance?: Db): Collection<PostLikeDocu
 
 export function getCommentsCollection(dbInstance?: Db): Collection<CommentDocument> {
   return (dbInstance ?? getDb()).collection<CommentDocument>('comments');
+}
+
+export function getCommentLikesCollection(dbInstance?: Db): Collection<CommentLikeDocument> {
+  return (dbInstance ?? getDb()).collection<CommentLikeDocument>('comment_likes');
 }
 
 export function getFollowsCollection(dbInstance?: Db): Collection<FollowDocument> {

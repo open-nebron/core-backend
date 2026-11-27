@@ -856,4 +856,65 @@ describe('Social - Reels Module', () => {
     expect(res.statusCode).toBe(403);
     expect(res.json().error.code).toBe('account_banned');
   });
+
+  it('17. Threaded reel comments support replies, flattening, likes, and sort=top|new', async () => {
+    const feedRes = await app.inject({
+      method: 'GET',
+      url: '/reels',
+      headers: { authorization: `Bearer ${tokenB}` },
+    });
+    const bobReel = feedRes.json().items.find((r: any) => r.authorId === userB);
+    const reelId = bobReel.id;
+
+    const rootRes = await app.inject({
+      method: 'POST',
+      url: `/reels/${reelId}/comments`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { body: 'Reel root comment' },
+    });
+    expect(rootRes.statusCode).toBe(201);
+    const rootId = rootRes.json().id;
+
+    const reply1Res = await app.inject({
+      method: 'POST',
+      url: `/reels/${reelId}/comments`,
+      headers: { authorization: `Bearer ${tokenC}` },
+      payload: { body: 'Reply on reel root', parentCommentId: rootId },
+    });
+    expect(reply1Res.statusCode).toBe(201);
+    expect(reply1Res.json().parentCommentId).toBe(rootId);
+
+    const reply2Res = await app.inject({
+      method: 'POST',
+      url: `/reels/${reelId}/comments`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { body: 'Reply to Carol on reel', parentCommentId: reply1Res.json().id },
+    });
+    expect(reply2Res.statusCode).toBe(201);
+    expect(reply2Res.json().parentCommentId).toBe(rootId);
+    expect(reply2Res.json().replyToUser).toEqual({ userId: userC, username: 'carol_reels' });
+
+    // Like root comment
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/comments/${rootId}/like`,
+          headers: { authorization: `Bearer ${tokenB}` },
+        })
+      ).statusCode
+    ).toBe(204);
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: `/reels/${reelId}/comments?sort=top`,
+      headers: { authorization: `Bearer ${tokenB}` },
+    });
+    expect(listRes.statusCode).toBe(200);
+    const rootItem = listRes.json().find((c: any) => c.id === rootId);
+    expect(rootItem.likeCount).toBe(1);
+    expect(rootItem.likedByViewer).toBe(true);
+    expect(rootItem.replyCount).toBe(2);
+    expect(rootItem.topReplies.length).toBe(2);
+  });
 });

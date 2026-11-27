@@ -4,6 +4,7 @@ import { createCommentRateLimiter } from '../../../plugins/rate-limit.js';
 import {
   createCommentSchema,
   commentsQuerySchema,
+  commentRepliesQuerySchema,
   commentIdParamSchema,
   postIdParamSchema,
 } from '../validate.js';
@@ -12,6 +13,7 @@ import { capture } from '../../../lib/analytics.js';
 
 interface CreateCommentBody {
   body: string;
+  parentCommentId?: string | null;
 }
 
 interface PostIdParams {
@@ -25,7 +27,55 @@ interface CommentIdParams {
 interface CommentsQuery {
   limit?: number;
   before?: string;
+  sort?: 'top' | 'new';
 }
+
+interface RepliesQuery {
+  limit?: number;
+  before?: string;
+}
+
+const authorSchema = {
+  type: 'object',
+  properties: {
+    userId: { type: 'string' },
+    username: { type: 'string' },
+    name: { type: 'string', nullable: true },
+    avatarUrl: { type: 'string', nullable: true },
+  },
+  required: ['userId', 'username'],
+};
+
+const replyToUserSchema = {
+  type: 'object',
+  nullable: true,
+  properties: {
+    userId: { type: 'string' },
+    username: { type: 'string' },
+  },
+  required: ['userId', 'username'],
+};
+
+const commentItemSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    postId: { type: 'string' },
+    reelId: { type: 'string' },
+    targetType: { type: 'string' },
+    parentCommentId: { type: 'string', nullable: true },
+    replyToUserId: { type: 'string', nullable: true },
+    replyToUser: replyToUserSchema,
+    body: { type: 'string' },
+    likeCount: { type: 'integer' },
+    replyCount: { type: 'integer' },
+    likedByViewer: { type: 'boolean' },
+    deleted: { type: 'boolean' },
+    createdAt: { type: 'string' },
+    author: authorSchema,
+  },
+  required: ['id', 'body', 'likeCount', 'replyCount', 'likedByViewer', 'createdAt', 'author'],
+};
 
 export const commentRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // 1. POST /posts/:id/comments
@@ -34,7 +84,7 @@ export const commentRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
     {
       preHandler: [authenticateRequest, createCommentRateLimiter],
       schema: {
-        description: 'Add a comment to a post',
+        description: 'Add a top-level comment or reply to a post',
         tags: ['Social - Comments'],
         params: {
           type: 'object',
@@ -47,6 +97,7 @@ export const commentRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
           type: 'object',
           properties: {
             body: { type: 'string', minLength: 1, maxLength: 300 },
+            parentCommentId: { type: 'string', nullable: true },
           },
           required: ['body'],
         },
@@ -54,22 +105,23 @@ export const commentRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
           201: {
             type: 'object',
             properties: {
-              id: { type: 'string' },
-              postId: { type: 'string' },
-              body: { type: 'string' },
-              createdAt: { type: 'string' },
-              author: {
+              ...commentItemSchema.properties,
+              topReplies: {
+                type: 'array',
+                items: commentItemSchema,
+              },
+              parent: {
                 type: 'object',
                 properties: {
-                  userId: { type: 'string' },
-                  username: { type: 'string' },
-                  name: { type: 'string', nullable: true },
-                  avatarUrl: { type: 'string', nullable: true },
+                  id: { type: 'string' },
+                  body: { type: 'string' },
+                  createdAt: { type: 'string' },
+                  author: authorSchema,
                 },
-                required: ['userId', 'username'],
+                required: ['id', 'body', 'createdAt', 'author'],
               },
             },
-            required: ['id', 'postId', 'body', 'createdAt', 'author'],
+            required: ['id', 'postId', 'body', 'likeCount', 'replyCount', 'likedByViewer', 'createdAt', 'author'],
           },
         },
       },
@@ -85,20 +137,25 @@ export const commentRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
       const comment = await defaultCommentService.createComment(
         viewerId,
         parsedParams.id,
-        parsedBody.body
+        parsedBody.body,
+        parsedBody.parentCommentId
       );
-      capture(viewerId, 'comment_created', { postId: parsedParams.id, commentId: comment.id });
+      capture(viewerId, 'comment_created', {
+        postId: parsedParams.id,
+        commentId: comment.id,
+        parentCommentId: comment.parentCommentId ?? null,
+      });
       return reply.status(201).send(comment);
     }
   );
 
-  // 2. GET /posts/:id/comments?limit=30&before=<ISO>
+  // 2. GET /posts/:id/comments?limit=20&before=<ISO>&sort=top|new
   app.get<{ Params: PostIdParams; Querystring: CommentsQuery }>(
     '/posts/:id/comments',
     {
       preHandler: [authenticateRequest],
       schema: {
-        description: 'Get comments on a post in chronological order',
+        description: 'Get top-level comments on a post with topReplies preview',
         tags: ['Social - Comments'],
         params: {
           type: 'object',
@@ -110,8 +167,9 @@ export const commentRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
         querystring: {
           type: 'object',
           properties: {
-            limit: { type: 'integer', minimum: 1, maximum: 50, default: 30 },
+            limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
             before: { type: 'string', format: 'date-time' },
+            sort: { type: 'string', enum: ['top', 'new'], default: 'top' },
           },
         },
         response: {
@@ -120,22 +178,13 @@ export const commentRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
             items: {
               type: 'object',
               properties: {
-                id: { type: 'string' },
-                postId: { type: 'string' },
-                body: { type: 'string' },
-                createdAt: { type: 'string' },
-                author: {
-                  type: 'object',
-                  properties: {
-                    userId: { type: 'string' },
-                    username: { type: 'string' },
-                    name: { type: 'string', nullable: true },
-                    avatarUrl: { type: 'string', nullable: true },
-                  },
-                  required: ['userId', 'username'],
+                ...commentItemSchema.properties,
+                topReplies: {
+                  type: 'array',
+                  items: commentItemSchema,
                 },
               },
-              required: ['id', 'postId', 'body', 'createdAt', 'author'],
+              required: ['id', 'postId', 'body', 'likeCount', 'replyCount', 'likedByViewer', 'createdAt', 'author', 'topReplies'],
             },
           },
         },
@@ -152,20 +201,69 @@ export const commentRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
       const comments = await defaultCommentService.getComments(
         viewerId,
         parsedParams.id,
-        parsedQuery.limit ?? 30,
-        parsedQuery.before
+        parsedQuery.limit ?? 20,
+        parsedQuery.before,
+        parsedQuery.sort ?? 'top'
       );
       return reply.status(200).send(comments);
     }
   );
 
-  // 3. DELETE /comments/:id
-  app.delete<{ Params: CommentIdParams }>(
-    '/comments/:id',
+  // 3. GET /comments/:id/replies?limit=20&before=<ISO>
+  app.get<{ Params: CommentIdParams; Querystring: RepliesQuery }>(
+    '/comments/:id/replies',
     {
       preHandler: [authenticateRequest],
       schema: {
-        description: 'Delete a comment (by comment author or post author)',
+        description: 'Get replies to a top-level comment',
+        tags: ['Social - Comments'],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+          },
+          required: ['id'],
+        },
+        querystring: {
+          type: 'object',
+          properties: {
+            limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
+            before: { type: 'string', format: 'date-time' },
+          },
+        },
+        response: {
+          200: {
+            type: 'array',
+            items: commentItemSchema,
+          },
+        },
+      },
+    },
+    async (
+      request: FastifyRequest<{ Params: CommentIdParams; Querystring: RepliesQuery }>,
+      reply: FastifyReply
+    ) => {
+      const viewerId = request.user.userId;
+      const parsedParams = commentIdParamSchema.parse(request.params);
+      const parsedQuery = commentRepliesQuerySchema.parse(request.query);
+
+      const replies = await defaultCommentService.getCommentReplies(
+        viewerId,
+        parsedParams.id,
+        parsedQuery.limit ?? 20,
+        parsedQuery.before
+      );
+      return reply.status(200).send(replies);
+    }
+  );
+
+  // 4. POST /comments/:id/like
+  app.post<{ Params: CommentIdParams }>(
+    '/comments/:id/like',
+    {
+      preHandler: [authenticateRequest],
+      schema: {
+        description: 'Like a comment (idempotent)',
         tags: ['Social - Comments'],
         params: {
           type: 'object',
@@ -177,7 +275,70 @@ export const commentRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
         response: {
           204: {
             type: 'null',
-            description: 'Comment successfully soft deleted',
+            description: 'Comment liked',
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: CommentIdParams }>, reply: FastifyReply) => {
+      const viewerId = request.user.userId;
+      const parsedParams = commentIdParamSchema.parse(request.params);
+      await defaultCommentService.likeComment(viewerId, parsedParams.id);
+      capture(viewerId, 'comment_liked', { commentId: parsedParams.id });
+      return reply.status(204).send();
+    }
+  );
+
+  // 5. DELETE /comments/:id/like
+  app.delete<{ Params: CommentIdParams }>(
+    '/comments/:id/like',
+    {
+      preHandler: [authenticateRequest],
+      schema: {
+        description: 'Unlike a comment (idempotent)',
+        tags: ['Social - Comments'],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+          },
+          required: ['id'],
+        },
+        response: {
+          204: {
+            type: 'null',
+            description: 'Comment unliked',
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: CommentIdParams }>, reply: FastifyReply) => {
+      const viewerId = request.user.userId;
+      const parsedParams = commentIdParamSchema.parse(request.params);
+      await defaultCommentService.unlikeComment(viewerId, parsedParams.id);
+      return reply.status(204).send();
+    }
+  );
+
+  // 6. DELETE /comments/:id
+  app.delete<{ Params: CommentIdParams }>(
+    '/comments/:id',
+    {
+      preHandler: [authenticateRequest],
+      schema: {
+        description: 'Delete a comment (preserves thread placeholder if it has replies)',
+        tags: ['Social - Comments'],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+          },
+          required: ['id'],
+        },
+        response: {
+          204: {
+            type: 'null',
+            description: 'Comment deleted',
           },
         },
       },
