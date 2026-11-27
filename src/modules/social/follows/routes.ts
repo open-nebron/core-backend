@@ -7,6 +7,7 @@ import {
 } from '../validate.js';
 import { defaultFollowService } from './service.js';
 import { capture } from '../../../lib/analytics.js';
+import { parseFollowSource } from '../../analytics/analytics.schema.js';
 
 interface UserIdParams {
   userId: string;
@@ -70,9 +71,10 @@ export const followRoutes: FastifyPluginAsync = async (app: FastifyInstance) => 
       const viewerId = request.user.userId;
       userIdParamSchema.parse(request.params);
       const targetUserId = request.params.userId;
+      const followSource = parseFollowSource(request.headers['x-follow-source']);
 
-      await defaultFollowService.followUser(viewerId, targetUserId);
-      capture(viewerId, 'user_followed', { targetUserId });
+      await defaultFollowService.followUser(viewerId, targetUserId, followSource);
+      capture(viewerId, 'user_followed', { targetUserId, source: followSource });
       return reply.status(204).send();
     }
   );

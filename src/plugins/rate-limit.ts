@@ -192,3 +192,10 @@ export const shareRateLimiter = createRedisRateLimiter({
   keyPrefix: 'ratelimit:share',
   keyGenerator: userKeyGen,
 });
+
+export const analyticsBeaconRateLimiter = createRedisRateLimiter({
+  limit: 300,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:analytics_beacon',
+  keyGenerator: userKeyGen,
+});

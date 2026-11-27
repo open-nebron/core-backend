@@ -7,10 +7,12 @@ import {
 import { getBlockedUserIds, isBlockedPair } from '../block-filter.js';
 import {
   getProfilesCollection,
+  getFollowSourcesCollection,
   getDb,
   getMongoClient,
   runInTransaction,
   type ProfileDocument,
+  type FollowSourceType,
 } from '../../../db/mongo.js';
 import {
   SelfFollowNotAllowedError,
@@ -58,7 +60,11 @@ export class FollowService {
     return getProfilesCollection(this.customDb ?? getDb());
   }
 
-  async followUser(followerId: string, followingId: string): Promise<void> {
+  async followUser(
+    followerId: string,
+    followingId: string,
+    source: FollowSourceType = 'other'
+  ): Promise<void> {
     if (followerId === followingId) {
       throw new SelfFollowNotAllowedError();
     }
@@ -86,6 +92,17 @@ export class FollowService {
     });
 
     if (inserted) {
+      try {
+        await getFollowSourcesCollection(this.customDb ?? getDb()).insertOne({
+          followerId,
+          followingId,
+          source,
+          at: new Date(),
+        });
+      } catch {
+        // Best-effort non-blocking follow source tracking
+      }
+
       await this.publisher.publishUserFollowed({
         followerId,
         followingId,

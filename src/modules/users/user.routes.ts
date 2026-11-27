@@ -6,6 +6,7 @@ import { NotFoundError, BlockedError } from '../../utils/errors.js';
 import { computePublicUrl } from '../../lib/r2.js';
 import { env } from '../../config/env.js';
 import { getBlockedUserIds, isBlockedPair } from '../social/block-filter.js';
+import { defaultAnalyticsService } from '../analytics/analytics.service.js';
 
 interface SearchUsersQuery {
   q?: string;
@@ -374,6 +375,14 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       responseObj.postCount = doc.postCount ?? 0;
       responseObj.isFollowingViewer = isFollowingViewer;
       responseObj.isFollowedByViewer = isFollowedByViewer;
+
+      if (!isInternal && viewerId && viewerId !== doc.userId) {
+        try {
+          await defaultAnalyticsService.recordProfileVisit(viewerId, doc.userId);
+        } catch {
+          // Best-effort non-blocking profile visit tracking
+        }
+      }
 
       return reply.status(200).send(responseObj);
     }

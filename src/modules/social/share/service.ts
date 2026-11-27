@@ -7,6 +7,7 @@ import {
   getReelsCollection,
   getCommentsCollection,
   getProfilesCollection,
+  getShareEventsCollection,
 } from '../../../db/mongo.js';
 import { getRedisClient } from '../../../db/redis.js';
 import { SaveRepository, defaultSaveRepository, type SaveContentType } from '../saves/repository.js';
@@ -198,7 +199,19 @@ export class ShareService {
     let shareCount = target.currentShareCount;
     if (shouldIncrement) {
       shareCount = await this.saveRepo.incrementShareCount(contentType, target.targetId);
-      const at = new Date().toISOString();
+      const now = new Date();
+      const at = now.toISOString();
+
+      try {
+        await getShareEventsCollection(this.db()).insertOne({
+          contentType,
+          contentId,
+          byUserId: viewerId,
+          at: now,
+        });
+      } catch {
+        // Non-blocking raw share event log
+      }
 
       await this.publisher.publishContentShared({
         contentType,

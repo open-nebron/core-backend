@@ -228,6 +228,108 @@ export interface ReelLikeDocument {
   createdAt: Date;
 }
 
+export type AnalyticsContentType = 'post' | 'reel' | 'story';
+export type AnalyticsSource = 'feed' | 'profile' | 'explore' | 'shared' | 'hashtag';
+export type FollowSourceType = 'profile' | 'feed' | 'reel' | 'search' | 'suggestion' | 'other';
+
+export interface ImpressionDocument {
+  _id?: any;
+  userId: string;
+  contentType: AnalyticsContentType;
+  contentId: string;
+  source: AnalyticsSource;
+  seenAt: Date;
+}
+
+export interface ContentViewDocument {
+  _id?: any;
+  userId: string;
+  contentType: 'post' | 'reel' | 'story';
+  contentId: string;
+  sessionId: string;
+  startedAt: Date;
+  endedAt: Date | null;
+  watchedSeconds: number;
+  totalSeconds: number;
+  completed: boolean;
+  source: string;
+  tapsForward?: number;
+  tapsBack?: number;
+  exited?: boolean;
+  replayed?: boolean;
+}
+
+export interface ProfileVisitDocument {
+  _id?: any;
+  visitorId: string;
+  visitedUserId: string;
+  at: Date;
+}
+
+export interface FollowSourceDocument {
+  _id?: any;
+  followerId: string;
+  followingId: string;
+  source: FollowSourceType;
+  at: Date;
+}
+
+export interface ShareEventDocument {
+  _id?: any;
+  contentType: 'post' | 'reel' | 'comment';
+  contentId: string;
+  byUserId: string;
+  at: Date;
+}
+
+export interface AnalyticsDailyDocument {
+  _id?: any;
+  contentType: AnalyticsContentType;
+  contentId: string;
+  authorId: string;
+  preview?: string;
+  contentCreatedAt?: Date;
+  date: string; // 'YYYY-MM-DD'
+  impressions: number;
+  reach: number;
+  views: number;
+  uniqueViews: number;
+  watchSeconds: number;
+  completions: number;
+  tapsForward: number;
+  tapsBack: number;
+  exits: number;
+  replays: number;
+  likes: number;
+  comments: number;
+  replies: number;
+  shares: number;
+  saves: number;
+  profileVisits: number;
+  newFollowers: number;
+  updatedAt: Date;
+}
+
+export interface CreatorDailyStatsDocument {
+  _id?: any;
+  userId: string;
+  date: string; // 'YYYY-MM-DD'
+  totalFollowers: number;
+  followersGained: number;
+  totalLikesReceived: number;
+  totalViews: number;
+  totalImpressions: number;
+  totalReach: number;
+  totalCommentsReceived: number;
+  totalSharesReceived: number;
+  totalSavesReceived: number;
+  profileVisits: number;
+  postsCreated: number;
+  reelsCreated: number;
+  storiesCreated: number;
+  updatedAt: Date;
+}
+
 let client: MongoClient | null = null;
 let db: Db | null = null;
 
@@ -472,6 +574,87 @@ export async function initMongoIndexes(database: Db): Promise<void> {
   } catch {
     // Ignore migration error if already migrated concurrently
   }
+
+  // V4-4 Analytics Collections & Retention TTL Indexes
+  const ttlSeconds = env.DECISION_ANALYTICS_RETENTION === '90d-raw' ? 90 * 24 * 60 * 60 : undefined;
+
+  const ensureSafeIndex = async (
+    col: Collection<any>,
+    keys: Record<string, 1 | -1>,
+    options: Record<string, unknown>
+  ) => {
+    try {
+      await col.createIndex(keys, options as any);
+    } catch (err: any) {
+      if (err?.code === 85 || err?.code === 86) {
+        if (options.name) {
+          await col.dropIndex(String(options.name)).catch(() => {});
+        }
+        await col.createIndex(keys, options as any);
+      } else {
+        throw err;
+      }
+    }
+  };
+
+  const impressions = database.collection<ImpressionDocument>('impressions');
+  await ensureSafeIndex(
+    impressions,
+    { seenAt: 1 },
+    ttlSeconds !== undefined
+      ? { expireAfterSeconds: ttlSeconds, name: 'idx_impressions_seenAt_ttl' }
+      : { name: 'idx_impressions_seenAt' }
+  );
+  await impressions.createIndex({ contentId: 1, seenAt: 1 }, { name: 'idx_impressions_contentId_seenAt' });
+  await impressions.createIndex({ userId: 1, seenAt: 1 }, { name: 'idx_impressions_userId_seenAt' });
+
+  const contentViews = database.collection<ContentViewDocument>('content_views');
+  await ensureSafeIndex(
+    contentViews,
+    { startedAt: 1 },
+    ttlSeconds !== undefined
+      ? { expireAfterSeconds: ttlSeconds, name: 'idx_content_views_startedAt_ttl' }
+      : { name: 'idx_content_views_startedAt' }
+  );
+  await contentViews.createIndex({ contentId: 1, startedAt: 1 }, { name: 'idx_content_views_contentId_startedAt' });
+  await contentViews.createIndex({ userId: 1, startedAt: 1 }, { name: 'idx_content_views_userId_startedAt' });
+
+  const profileVisits = database.collection<ProfileVisitDocument>('profile_visits');
+  await ensureSafeIndex(
+    profileVisits,
+    { at: 1 },
+    ttlSeconds !== undefined
+      ? { expireAfterSeconds: ttlSeconds, name: 'idx_profile_visits_at_ttl' }
+      : { name: 'idx_profile_visits_at' }
+  );
+  await profileVisits.createIndex({ visitedUserId: 1, at: -1 }, { name: 'idx_profile_visits_visitedUserId_at' });
+
+  const followSources = database.collection<FollowSourceDocument>('follow_sources');
+  await followSources.createIndex({ followingId: 1, at: -1 }, { name: 'idx_follow_sources_followingId_at' });
+  await followSources.createIndex({ followerId: 1, followingId: 1 }, { name: 'idx_follow_sources_pair' });
+
+  const shareEvents = database.collection<ShareEventDocument>('share_events');
+  await ensureSafeIndex(
+    shareEvents,
+    { at: 1 },
+    ttlSeconds !== undefined
+      ? { expireAfterSeconds: ttlSeconds, name: 'idx_share_events_at_ttl' }
+      : { name: 'idx_share_events_at' }
+  );
+  await shareEvents.createIndex({ contentType: 1, contentId: 1, at: 1 }, { name: 'idx_share_events_content_at' });
+
+  const analyticsDaily = database.collection<AnalyticsDailyDocument>('analytics_daily');
+  await analyticsDaily.createIndex(
+    { contentType: 1, contentId: 1, date: 1 },
+    { unique: true, name: 'idx_analytics_daily_unique' }
+  );
+  await analyticsDaily.createIndex({ authorId: 1, date: 1 }, { name: 'idx_analytics_daily_author_date' });
+
+  const creatorDailyStats = database.collection<CreatorDailyStatsDocument>('creator_daily_stats');
+  await creatorDailyStats.createIndex(
+    { userId: 1, date: 1 },
+    { unique: true, name: 'idx_creator_daily_stats_unique' }
+  );
 }
 
 export function getDb(): Db {
@@ -555,6 +738,34 @@ export function getSavedReelsCollection(dbInstance?: Db): Collection<SavedReelDo
 
 export function getSavedCommentsCollection(dbInstance?: Db): Collection<SavedCommentDocument> {
   return (dbInstance ?? getDb()).collection<SavedCommentDocument>('saved_comments');
+}
+
+export function getImpressionsCollection(dbInstance?: Db): Collection<ImpressionDocument> {
+  return (dbInstance ?? getDb()).collection<ImpressionDocument>('impressions');
+}
+
+export function getContentViewsCollection(dbInstance?: Db): Collection<ContentViewDocument> {
+  return (dbInstance ?? getDb()).collection<ContentViewDocument>('content_views');
+}
+
+export function getProfileVisitsCollection(dbInstance?: Db): Collection<ProfileVisitDocument> {
+  return (dbInstance ?? getDb()).collection<ProfileVisitDocument>('profile_visits');
+}
+
+export function getFollowSourcesCollection(dbInstance?: Db): Collection<FollowSourceDocument> {
+  return (dbInstance ?? getDb()).collection<FollowSourceDocument>('follow_sources');
+}
+
+export function getShareEventsCollection(dbInstance?: Db): Collection<ShareEventDocument> {
+  return (dbInstance ?? getDb()).collection<ShareEventDocument>('share_events');
+}
+
+export function getAnalyticsDailyCollection(dbInstance?: Db): Collection<AnalyticsDailyDocument> {
+  return (dbInstance ?? getDb()).collection<AnalyticsDailyDocument>('analytics_daily');
+}
+
+export function getCreatorDailyStatsCollection(dbInstance?: Db): Collection<CreatorDailyStatsDocument> {
+  return (dbInstance ?? getDb()).collection<CreatorDailyStatsDocument>('creator_daily_stats');
 }
 
 export async function runInTransaction<T>(
