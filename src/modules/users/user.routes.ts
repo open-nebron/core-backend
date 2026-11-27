@@ -89,7 +89,7 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 50) : 20;
 
       const escaped = escapeRegex(trimmed);
-      const regex = new RegExp(`^${escaped}`, 'i');
+      const regex = new RegExp(escaped, 'i');
 
       const collection = getProfilesCollection();
       const docs = await collection
@@ -101,6 +101,18 @@ export const userRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         })
         .limit(limit * 2)
         .toArray();
+
+      // Rank prefix matches above mid-string matches
+      docs.sort((a: ProfileDocument, b: ProfileDocument) => {
+        const aPrefix =
+          a.username.toLowerCase().startsWith(trimmed) ||
+          Boolean(a.name && a.name.toLowerCase().startsWith(trimmed));
+        const bPrefix =
+          b.username.toLowerCase().startsWith(trimmed) ||
+          Boolean(b.name && b.name.toLowerCase().startsWith(trimmed));
+        if (aPrefix === bPrefix) return 0;
+        return aPrefix ? -1 : 1;
+      });
 
       const viewerId = request.user?.userId;
       let candidateDocs = docs;

@@ -119,6 +119,18 @@ describe('Users API Routes (/users)', () => {
       expect(json.users[0]).not.toHaveProperty('bio');
     });
 
+    it('matches substring in user name or username', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/users/search?q=springs&limit=10',
+        headers: { authorization: `Bearer ${validToken}` },
+      });
+      expect(res.statusCode).toBe(200);
+      const json = res.json();
+      expect(json.users.length).toBe(1);
+      expect(json.users[0].username).toBe('alice');
+    });
+
     it('returns 400 when q is missing or invalid', async () => {
       const res = await app.inject({
         method: 'GET',
