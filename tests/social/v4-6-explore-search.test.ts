@@ -10,6 +10,7 @@ import { jwksService } from '../../src/auth/jwks.js';
 import { getOrCreateTestAuthKeys, createMockAccessToken } from '../mocks/jwt.mock.js';
 import { handleEvent } from '../../src/modules/events/handlers.js';
 import { SocialSearchService, defaultSocialSearchService } from '../../src/modules/search/meili.service.js';
+import { computePublicUrl } from '../../src/lib/r2.js';
 
 describe('Social - V4-6 Explore, Profile Stats & Meilisearch Search', () => {
   let app: FastifyInstance;
@@ -661,5 +662,90 @@ describe('Social - V4-6 Explore, Profile Stats & Meilisearch Search', () => {
     expect(patchRes.statusCode).toBe(200);
     const updated = patchRes.json();
     expect(updated.hashtags).toEqual(['newtag', 'extra']);
+  });
+
+  it('11. Resolves live media URLs from object keys when stale tunnel URLs are stored in DB', async () => {
+    const staleBase = 'https://stale-tunnel-host.trycloudflare.com/nebron-media';
+    const postId = new ObjectId();
+    const imageKey = `posts/${userB}/img.png`;
+    await db.collection('posts').insertOne({
+      _id: postId,
+      authorId: userB,
+      body: 'Stale URL post',
+      imageKey,
+      imageUrl: `${staleBase}/${imageKey}`,
+      likeCount: 0,
+      commentCount: 0,
+      saveCount: 0,
+      shareCount: 0,
+      mentions: [],
+      hashtags: [],
+      deleted: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const reelId = new ObjectId();
+    const videoKey = `reels/${userB}/clip.mp4`;
+    const thumbKey = `reels/${userB}/thumb.jpg`;
+    await db.collection('reels').insertOne({
+      _id: reelId,
+      authorId: userB,
+      caption: 'Stale URL reel',
+      videoKey,
+      videoUrl: `${staleBase}/${videoKey}`,
+      thumbnailKey: thumbKey,
+      thumbnailUrl: `${staleBase}/${thumbKey}`,
+      duration: 8,
+      viewCount: 0,
+      likeCount: 0,
+      commentCount: 0,
+      saveCount: 0,
+      shareCount: 0,
+      deleted: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const storyMediaKey = `stories/${userA}/s.jpg`;
+    await db.collection('stories').insertOne({
+      _id: new ObjectId(),
+      authorId: userA,
+      mediaType: 'image',
+      mediaKey: storyMediaKey,
+      mediaUrl: `${staleBase}/${storyMediaKey}`,
+      thumbnailKey: null,
+      duration: 5,
+      caption: 'Stale URL story',
+      viewers: [],
+      viewerCount: 0,
+      expiresAt: new Date(Date.now() + 86_400_000),
+      createdAt: new Date(),
+    });
+
+    const postRes = await app.inject({
+      method: 'GET',
+      url: `/posts/${postId.toString()}`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(postRes.statusCode).toBe(200);
+    expect(postRes.json().imageUrl).toBe(computePublicUrl(imageKey));
+
+    const reelRes = await app.inject({
+      method: 'GET',
+      url: `/reels/${reelId.toString()}`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(reelRes.statusCode).toBe(200);
+    expect(reelRes.json().videoUrl).toBe(computePublicUrl(videoKey));
+    expect(reelRes.json().thumbnailUrl).toBe(computePublicUrl(thumbKey));
+
+    const storiesRes = await app.inject({
+      method: 'GET',
+      url: `/stories/${userA}`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(storiesRes.statusCode).toBe(200);
+    expect(storiesRes.json().stories[0].mediaUrl).toBe(computePublicUrl(storyMediaKey));
   });
 });

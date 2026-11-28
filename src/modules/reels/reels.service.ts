@@ -15,6 +15,7 @@ import { env } from '../../config/env.js';
 import {
   ACCEPTED_IMAGE_TYPES,
   computePublicUrl,
+  resolveMediaUrl,
   createPresignedUpload,
   headObject,
   isValidUserKey,
@@ -201,8 +202,8 @@ export class ReelsService {
         id,
         authorId: doc.authorId,
         caption: doc.caption ?? null,
-        videoUrl: doc.videoUrl,
-        thumbnailUrl: doc.thumbnailUrl ?? null,
+        videoUrl: resolveMediaUrl(doc.videoKey, doc.videoUrl) ?? doc.videoUrl,
+        thumbnailUrl: resolveMediaUrl(doc.thumbnailKey, doc.thumbnailUrl),
         duration: doc.duration,
         viewCount: (doc.viewCount ?? 0) + (bufferedViews.get(id) ?? 0),
         likeCount: doc.likeCount ?? 0,

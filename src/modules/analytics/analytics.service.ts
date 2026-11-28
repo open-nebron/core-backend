@@ -19,7 +19,7 @@ import {
   type AnalyticsSource,
   type CreatorDailyStatsDocument,
 } from '../../db/mongo.js';
-import { computePublicUrl } from '../../lib/r2.js';
+import { computePublicUrl, resolveMediaUrl } from '../../lib/r2.js';
 import { getRedisClient } from '../../db/redis.js';
 import { REEL_VIEWS_BUFFER_KEY } from '../../jobs/reel-jobs.js';
 import { BlockedError, ForbiddenError, NotFoundError } from '../../utils/errors.js';
@@ -751,7 +751,7 @@ export class AnalyticsService {
 
       if (target.contentType === 'post') {
         const pDoc = postDocMap.get(target.contentId);
-        thumbnailUrl = pDoc?.imageUrl ?? null;
+        thumbnailUrl = pDoc ? resolveMediaUrl(pDoc.imageKey, pDoc.imageUrl) : null;
         if (inPeriod && pDoc) {
           itemLikes = Math.max(itemLikes, pDoc.likeCount ?? 0);
           itemComments = Math.max(itemComments, pDoc.commentCount ?? 0);
@@ -760,7 +760,7 @@ export class AnalyticsService {
         }
       } else if (target.contentType === 'reel') {
         const rDoc = reelDocMap.get(target.contentId);
-        thumbnailUrl = rDoc?.thumbnailUrl ?? null;
+        thumbnailUrl = rDoc ? resolveMediaUrl(rDoc.thumbnailKey, rDoc.thumbnailUrl) : null;
         if (inPeriod && rDoc) {
           itemLikes = Math.max(itemLikes, rDoc.likeCount ?? 0);
           itemComments = Math.max(itemComments, rDoc.commentCount ?? 0);
@@ -774,7 +774,7 @@ export class AnalyticsService {
           thumbnailUrl = sDoc.thumbnailKey
             ? computePublicUrl(sDoc.thumbnailKey)
             : sDoc.mediaType === 'image'
-              ? sDoc.mediaUrl
+              ? resolveMediaUrl(sDoc.mediaKey, sDoc.mediaUrl)
               : null;
         }
       }
@@ -1047,7 +1047,7 @@ export class AnalyticsService {
       return {
         postId: cid,
         preview: (p.body || '').slice(0, 120),
-        thumbnailUrl: p.imageUrl ?? null,
+        thumbnailUrl: resolveMediaUrl(p.imageKey, p.imageUrl),
         createdAt: createdAt.toISOString(),
         impressions: t.impressions,
         reach: t.reach,
@@ -1115,7 +1115,7 @@ export class AnalyticsService {
       return {
         reelId: cid,
         preview: (r.caption || 'Reel').slice(0, 120),
-        thumbnailUrl: r.thumbnailUrl ?? null,
+        thumbnailUrl: resolveMediaUrl(r.thumbnailKey, r.thumbnailUrl),
         createdAt: createdAt.toISOString(),
         views,
         uniqueViews,
@@ -1165,7 +1165,7 @@ export class AnalyticsService {
         ? sDoc.thumbnailKey
           ? computePublicUrl(sDoc.thumbnailKey)
           : sDoc.mediaType === 'image'
-            ? sDoc.mediaUrl
+            ? resolveMediaUrl(sDoc.mediaKey, sDoc.mediaUrl)
             : null
         : null;
       const completionRate =
@@ -1212,7 +1212,7 @@ export class AnalyticsService {
         if (post.authorId !== creatorId) {
           throw new ForbiddenError('Cannot access analytics for another user content', 'forbidden');
         }
-        thumbnailUrl = post.imageUrl ?? null;
+        thumbnailUrl = resolveMediaUrl(post.imageKey, post.imageUrl);
         docLikes = post.likeCount ?? 0;
         docComments = post.commentCount ?? 0;
         docShares = post.shareCount ?? 0;
@@ -1231,7 +1231,7 @@ export class AnalyticsService {
         if (reel.authorId !== creatorId) {
           throw new ForbiddenError('Cannot access analytics for another user content', 'forbidden');
         }
-        thumbnailUrl = reel.thumbnailUrl ?? null;
+        thumbnailUrl = resolveMediaUrl(reel.thumbnailKey, reel.thumbnailUrl);
         mediaType = 'video';
         docLikes = reel.likeCount ?? 0;
         docComments = reel.commentCount ?? 0;
@@ -1257,7 +1257,7 @@ export class AnalyticsService {
         thumbnailUrl = story.thumbnailKey
           ? computePublicUrl(story.thumbnailKey)
           : story.mediaType === 'image'
-            ? story.mediaUrl
+            ? resolveMediaUrl(story.mediaKey, story.mediaUrl)
             : null;
         targetRef = {
           contentType: 'story',

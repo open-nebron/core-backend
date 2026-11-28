@@ -22,7 +22,7 @@ import {
   NotFoundError,
   RateLimitError,
 } from '../../utils/errors.js';
-import { computePublicUrl } from '../../lib/r2.js';
+import { computePublicUrl, resolveMediaUrl } from '../../lib/r2.js';
 import { defaultEventPublisher } from '../events/publisher.js';
 import { defaultPostService } from '../social/posts/service.js';
 import { defaultCommentService } from '../social/comments/service.js';
@@ -269,7 +269,7 @@ export class ReportsService {
           targetContent = {
             id: post._id.toString(),
             body: post.body,
-            imageUrl: post.imageUrl || computePublicUrl(post.imageKey, post.updatedAt),
+            imageUrl: resolveMediaUrl(post.imageKey, post.imageUrl, post.updatedAt),
             deleted: post.deleted,
             createdAt: post.createdAt,
           };
@@ -608,7 +608,7 @@ export class ReportsService {
       recentPosts: posts.map((p) => ({
         id: p._id.toString(),
         body: p.body,
-        imageUrl: p.imageUrl || computePublicUrl(p.imageKey, p.updatedAt),
+        imageUrl: resolveMediaUrl(p.imageKey, p.imageUrl, p.updatedAt),
         likeCount: p.likeCount,
         commentCount: p.commentCount,
         createdAt: p.createdAt.toISOString(),

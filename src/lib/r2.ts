@@ -214,3 +214,17 @@ export function computePublicUrl(objectKey: string | null | undefined, updatedAt
   const versionParam = updatedAt ? `?v=${updatedAt.getTime()}` : '';
   return `${baseUrl}/${objectKey}${versionParam}`;
 }
+
+/**
+ * Derives a live public media URL from objectKey when available, falling back to storedUrl.
+ */
+export function resolveMediaUrl(
+  objectKey: string | null | undefined,
+  storedUrl?: string | null,
+  updatedAt?: Date
+): string | null {
+  if (objectKey) {
+    return computePublicUrl(objectKey, updatedAt);
+  }
+  return storedUrl ?? null;
+}

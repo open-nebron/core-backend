@@ -24,7 +24,7 @@ import {
   BadRequestError,
   NotPostAuthorError,
 } from '../../../utils/errors.js';
-import { computePublicUrl, isValidUserKey, headObject, deleteObject, ACCEPTED_IMAGE_TYPES } from '../../../lib/r2.js';
+import { computePublicUrl, resolveMediaUrl, isValidUserKey, headObject, deleteObject, ACCEPTED_IMAGE_TYPES } from '../../../lib/r2.js';
 import { env } from '../../../config/env.js';
 import { sanitizePostBody } from '../validate.js';
 import { resolveAndRecordTokens, emitTokenEvents } from '../tokens.js';
@@ -285,7 +285,7 @@ export class PostService {
         id: pid,
         body: p.body,
         imageKey: p.imageKey ?? null,
-        imageUrl: p.imageUrl ?? null,
+        imageUrl: resolveMediaUrl(p.imageKey, p.imageUrl),
         mentions: p.mentions ?? [],
         hashtags: p.hashtags ?? [],
         likeCount: p.likeCount ?? 0,
@@ -347,7 +347,7 @@ export class PostService {
       id: post._id.toString(),
       body: post.body,
       imageKey: post.imageKey ?? null,
-      imageUrl: post.imageUrl ?? null,
+      imageUrl: resolveMediaUrl(post.imageKey, post.imageUrl),
       mentions: post.mentions ?? [],
       hashtags: post.hashtags ?? [],
       likeCount: post.likeCount ?? 0,
@@ -533,7 +533,7 @@ export class PostService {
       id: updated._id.toString(),
       body: updated.body,
       imageKey: updated.imageKey ?? null,
-      imageUrl: updated.imageUrl ?? null,
+      imageUrl: resolveMediaUrl(updated.imageKey, updated.imageUrl),
       mentions: updated.mentions ?? [],
       hashtags: updated.hashtags ?? [],
       likeCount: updated.likeCount ?? 0,

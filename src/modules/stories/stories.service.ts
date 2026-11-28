@@ -11,6 +11,7 @@ import {
   ACCEPTED_IMAGE_TYPES,
   ACCEPTED_VIDEO_TYPES,
   computePublicUrl,
+  resolveMediaUrl,
   createPresignedUpload,
   deleteObject,
   headObject,
@@ -100,7 +101,7 @@ export class StoriesService {
     return {
       id: doc._id.toString(),
       authorId: doc.authorId,
-      mediaUrl: doc.mediaUrl,
+      mediaUrl: resolveMediaUrl(doc.mediaKey, doc.mediaUrl) ?? doc.mediaUrl,
       mediaType: doc.mediaType,
       thumbnailUrl: doc.thumbnailKey ? computePublicUrl(doc.thumbnailKey) : null,
       duration: doc.duration,
