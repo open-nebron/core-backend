@@ -199,3 +199,24 @@ export const analyticsBeaconRateLimiter = createRedisRateLimiter({
   keyPrefix: 'ratelimit:analytics_beacon',
   keyGenerator: userKeyGen,
 });
+
+export const commentReactionWriteRateLimiter = createRedisRateLimiter({
+  limit: 60,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:comment_reaction_write',
+  keyGenerator: userKeyGen,
+});
+
+export const commentReactionReadRateLimiter = createRedisRateLimiter({
+  limit: 120,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:comment_reaction_read',
+  keyGenerator: (req) => req.user?.userId || req.ip || 'anonymous',
+});
+
+export const analyticsDepthRateLimiter = createRedisRateLimiter({
+  limit: 120,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:analytics_depth',
+  keyGenerator: userKeyGen,
+});

@@ -3,15 +3,23 @@ import {
   getDb,
   getCommentsCollection,
   getCommentLikesCollection,
+  getCommentReactionsCollection,
   getPostsCollection,
   getReelsCollection,
   type CommentDocument,
   type CommentLikeDocument,
+  type CommentReactionDocument,
   type PostDocument,
   type ReelDocument,
 } from '../../../db/mongo.js';
 
 export type CommentSortOrder = 'top' | 'new';
+
+export interface CommentReactionSummary {
+  emoji: string;
+  count: number;
+  userIds: string[];
+}
 
 export class CommentRepository {
   private customDb?: Db;
@@ -26,6 +34,10 @@ export class CommentRepository {
 
   private getLikesCol(): Collection<CommentLikeDocument> {
     return getCommentLikesCollection(this.customDb ?? getDb());
+  }
+
+  private getReactionsCol(): Collection<CommentReactionDocument> {
+    return getCommentReactionsCollection(this.customDb ?? getDb());
   }
 
   private getPostsCol(): Collection<PostDocument> {
@@ -418,6 +430,92 @@ export class CommentRepository {
     }
 
     return result;
+  }
+
+  async addReaction(
+    commentId: ObjectId,
+    emoji: string,
+    userId: string
+  ): Promise<boolean> {
+    try {
+      const res = await this.getReactionsCol().updateOne(
+        { commentId, emoji, userId },
+        {
+          $setOnInsert: {
+            commentId,
+            emoji,
+            userId,
+            createdAt: new Date(),
+          },
+        },
+        { upsert: true }
+      );
+      return (res.upsertedCount ?? 0) > 0;
+    } catch (err: any) {
+      if (err?.code === 11000) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
+  async removeReaction(
+    commentId: ObjectId,
+    emoji: string,
+    userId: string
+  ): Promise<boolean> {
+    const res = await this.getReactionsCol().deleteOne({ commentId, emoji, userId });
+    return (res.deletedCount ?? 0) > 0;
+  }
+
+  async getReactionsSummaryBatch(
+    commentIds: ObjectId[]
+  ): Promise<Map<string, CommentReactionSummary[]>> {
+    const result = new Map<string, CommentReactionSummary[]>();
+    if (commentIds.length === 0) return result;
+
+    const docs = await this.getReactionsCol()
+      .find({ commentId: { $in: commentIds } })
+      .sort({ createdAt: 1 })
+      .toArray();
+
+    const perComment = new Map<string, Map<string, { count: number; userIds: string[] }>>();
+    for (const doc of docs) {
+      const cid = doc.commentId.toString();
+      let emojiMap = perComment.get(cid);
+      if (!emojiMap) {
+        emojiMap = new Map();
+        perComment.set(cid, emojiMap);
+      }
+      let entry = emojiMap.get(doc.emoji);
+      if (!entry) {
+        entry = { count: 0, userIds: [] };
+        emojiMap.set(doc.emoji, entry);
+      }
+      entry.count++;
+      if (entry.userIds.length < 50) {
+        entry.userIds.push(doc.userId);
+      }
+    }
+
+    for (const [cid, emojiMap] of perComment.entries()) {
+      const summaries: CommentReactionSummary[] = [];
+      for (const [emoji, info] of emojiMap.entries()) {
+        summaries.push({
+          emoji,
+          count: info.count,
+          userIds: info.userIds,
+        });
+      }
+      result.set(cid, summaries);
+    }
+
+    return result;
+  }
+
+  async getReactionsSummary(commentId: ObjectId): Promise<CommentReactionSummary[]> {
+    const map = await this.getReactionsSummaryBatch([commentId]);
+    return map.get(commentId.toString()) ?? [];
   }
 }
 

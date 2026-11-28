@@ -1,5 +1,12 @@
 import { ObjectId, type Db, type MongoClient } from 'mongodb';
-import { CommentRepository, defaultCommentRepository, type CommentSortOrder } from './repository.js';
+import {
+  CommentRepository,
+  defaultCommentRepository,
+  type CommentReactionSummary,
+  type CommentSortOrder,
+} from './repository.js';
+import { defaultEngagementDepthService } from '../../analytics/engagement-depth.js';
+import { getRedisClient } from '../../../db/redis.js';
 import { PostRepository, defaultPostRepository } from '../posts/repository.js';
 import { FollowRepository, defaultFollowRepository } from '../follows/repository.js';
 import { SaveRepository, defaultSaveRepository } from '../saves/repository.js';
@@ -26,7 +33,7 @@ import {
   NotPostAuthorError,
 } from '../../../utils/errors.js';
 import { computePublicUrl } from '../../../lib/r2.js';
-import { sanitizePostBody } from '../validate.js';
+import { sanitizePostBody, validateCommentEmoji } from '../validate.js';
 import { resolveAndRecordTokens, emitTokenEvents } from '../tokens.js';
 
 export interface CommentAuthor {
@@ -72,9 +79,12 @@ export interface CommentResponse {
   deleted?: boolean;
   createdAt: string;
   author: CommentAuthor;
+  reactions?: CommentReactionSummary[];
   topReplies?: CommentResponse[];
   parent?: CommentParentPreview;
 }
+
+export type { CommentReactionSummary };
 
 export interface ReelCommentResponse extends CommentResponse {
   reelId: string;
@@ -351,6 +361,23 @@ export class CommentService {
       }
     });
 
+    const depth = !parentInfo
+      ? 0
+      : parentInfo.targetParent.parentCommentId
+        ? 2
+        : 1;
+    await defaultEngagementDepthService.recordThreadDepth(
+      {
+        commentId: createdComment._id,
+        postId: target.targetId,
+        targetType,
+        depth,
+        authorId: viewerId,
+        createdAt: now,
+      },
+      this.customDb
+    );
+
     const targetIdString = target.targetId.toString();
     await emitTokenEvents({
       mentions,
@@ -419,6 +446,7 @@ export class CommentService {
       deleted: false,
       createdAt: now.toISOString(),
       author: this.formatAuthor(profileMap.get(viewerId), viewerId),
+      reactions: [],
       topReplies: [],
       ...(parentPreview ? { parent: parentPreview } : {}),
     };
@@ -502,7 +530,8 @@ export class CommentService {
     likedSet: Set<string>,
     blockedIds: Set<string>,
     topReplies?: CommentResponse[],
-    savedSet?: Set<string>
+    savedSet?: Set<string>,
+    reactionsMap?: Map<string, CommentReactionSummary[]>
   ): CommentResponse {
     const idStr = doc._id.toString();
     const isBlockedPlaceholder = Boolean(doc.deleted && blockedIds.has(doc.authorId));
@@ -542,6 +571,7 @@ export class CommentService {
       deleted: Boolean(doc.deleted),
       createdAt: this.toIsoString(doc.createdAt),
       author,
+      reactions: doc.deleted ? [] : (reactionsMap?.get(idStr) ?? []),
       ...(topReplies !== undefined ? { topReplies } : {}),
     };
   }
@@ -612,16 +642,27 @@ export class CommentService {
         commentIdsForLikes.push(r._id);
       }
     }
-    const [likedSet, savedSet] = await Promise.all([
+    const [likedSet, savedSet, reactionsMap] = await Promise.all([
       this.repo.hasLikedCommentsBatch(viewerId, commentIdsForLikes),
       this.saveRepo.hasSavedBatch('comment', viewerId, commentIdsForLikes),
+      this.repo.getReactionsSummaryBatch(commentIdsForLikes),
     ]);
 
     const tid = target.targetId.toString();
     return filteredParents.map((c) => {
       const childDocs = repliesByParent.get(c._id.toString()) || [];
       const topReplies = childDocs.map((r) =>
-        this.formatDocResponse(r, targetType, tid, profileMap, likedSet, blockedIds, undefined, savedSet)
+        this.formatDocResponse(
+          r,
+          targetType,
+          tid,
+          profileMap,
+          likedSet,
+          blockedIds,
+          undefined,
+          savedSet,
+          reactionsMap
+        )
       );
       return this.formatDocResponse(
         c,
@@ -631,7 +672,8 @@ export class CommentService {
         likedSet,
         blockedIds,
         topReplies,
-        savedSet
+        savedSet,
+        reactionsMap
       );
     });
   }
@@ -704,14 +746,25 @@ export class CommentService {
     if (visibleReplies.length === 0) return [];
 
     const visibleIds = visibleReplies.map((r) => r._id);
-    const [likedSet, savedSet] = await Promise.all([
+    const [likedSet, savedSet, reactionsMap] = await Promise.all([
       this.repo.hasLikedCommentsBatch(viewerId, visibleIds),
       this.saveRepo.hasSavedBatch('comment', viewerId, visibleIds),
+      this.repo.getReactionsSummaryBatch(visibleIds),
     ]);
 
     const tid = target.targetId.toString();
     return visibleReplies.map((r) =>
-      this.formatDocResponse(r, target.targetType, tid, profileMap, likedSet, blockedIds, undefined, savedSet)
+      this.formatDocResponse(
+        r,
+        target.targetType,
+        tid,
+        profileMap,
+        likedSet,
+        blockedIds,
+        undefined,
+        savedSet,
+        reactionsMap
+      )
     );
   }
 
@@ -979,10 +1032,11 @@ export class CommentService {
 
     const profileIds = [viewerId];
     if (updated.replyToUserId) profileIds.push(updated.replyToUserId);
-    const [profileMap, likedSet, savedSet] = await Promise.all([
+    const [profileMap, likedSet, savedSet, reactionsMap] = await Promise.all([
       this.fetchProfileMap(Array.from(new Set(profileIds))),
       this.repo.hasLikedCommentsBatch(viewerId, [commentId]),
       this.saveRepo.hasSavedBatch('comment', viewerId, [commentId]),
+      this.repo.getReactionsSummaryBatch([commentId]),
     ]);
 
     const response = this.formatDocResponse(
@@ -993,7 +1047,8 @@ export class CommentService {
       likedSet,
       new Set(),
       undefined,
-      savedSet
+      savedSet,
+      reactionsMap
     );
 
     await this.notifyCommentWsRecipients(
@@ -1195,15 +1250,16 @@ export class CommentService {
 
     const allowedAuthors = Array.from(new Set(filtered.map((c) => c.authorId)));
     const commentIds = filtered.map((c) => c._id);
-    const [profileMap, likedSet, savedSet] = await Promise.all([
+    const [profileMap, likedSet, savedSet, reactionsMap] = await Promise.all([
       this.fetchProfileMap(allowedAuthors),
       this.repo.hasLikedCommentsBatch(viewerId, commentIds),
       this.saveRepo.hasSavedBatch('comment', viewerId, commentIds),
+      this.repo.getReactionsSummaryBatch(commentIds),
     ]);
 
     const pid = postId.toString();
     return filtered.map((c) =>
-      this.formatDocResponse(c, 'post', pid, profileMap, likedSet, blockedIds, undefined, savedSet)
+      this.formatDocResponse(c, 'post', pid, profileMap, likedSet, blockedIds, undefined, savedSet, reactionsMap)
     );
   }
 
@@ -1228,10 +1284,11 @@ export class CommentService {
     const blockedIds = await getBlockedUserIds(viewerId, Array.from(allAuthorIds), this.customDb);
     const allowedAuthorIds = Array.from(allAuthorIds).filter((id) => !blockedIds.has(id));
 
-    const [profileMap, likedSet, savedSet] = await Promise.all([
+    const [profileMap, likedSet, savedSet, reactionsMap] = await Promise.all([
       this.fetchProfileMap(allowedAuthorIds),
       this.repo.hasLikedCommentsBatch(viewerId, allCommentIds),
       this.saveRepo.hasSavedBatch('comment', viewerId, allCommentIds),
+      this.repo.getReactionsSummaryBatch(allCommentIds),
     ]);
 
     for (const [pid, list] of map.entries()) {
@@ -1239,7 +1296,17 @@ export class CommentService {
       result.set(
         pid,
         filtered.map((c) =>
-          this.formatDocResponse(c, 'post', pid, profileMap, likedSet, blockedIds, undefined, savedSet)
+          this.formatDocResponse(
+            c,
+            'post',
+            pid,
+            profileMap,
+            likedSet,
+            blockedIds,
+            undefined,
+            savedSet,
+            reactionsMap
+          )
         )
       );
     }
@@ -1259,10 +1326,11 @@ export class CommentService {
       ])
     );
     const commentIds = docs.map((d) => d._id);
-    const [profileMap, likedSet, savedSet] = await Promise.all([
+    const [profileMap, likedSet, savedSet, reactionsMap] = await Promise.all([
       this.fetchProfileMap(profileIds),
       this.repo.hasLikedCommentsBatch(viewerId, commentIds),
       Promise.resolve(new Set(commentIds.map((id) => id.toString()))),
+      this.repo.getReactionsSummaryBatch(commentIds),
     ]);
 
     const emptyBlocked = new Set<string>();
@@ -1277,9 +1345,185 @@ export class CommentService {
         likedSet,
         emptyBlocked,
         undefined,
-        savedSet
+        savedSet,
+        reactionsMap
       );
     });
+  }
+
+  private async invalidateDepthCache(
+    ownerId: string,
+    targetType: 'post' | 'reel',
+    targetIdStr: string
+  ): Promise<void> {
+    try {
+      const redis = getRedisClient();
+      await redis.del(`analytics:depth:${ownerId}:${targetType}:${targetIdStr}`);
+    } catch {
+      // Ignore cache invalidation error
+    }
+  }
+
+  async addCommentReaction(
+    viewerId: string,
+    commentIdStr: string,
+    rawEmoji: string
+  ): Promise<{ reactions: CommentReactionSummary[] }> {
+    const commentId = this.parseObjectId(commentIdStr, 'Comment');
+    const emoji = validateCommentEmoji(rawEmoji);
+
+    const comment = await this.repo.getCommentById(commentId);
+    if (!comment) {
+      throw new NotFoundError('Comment not found', 'comment_not_found');
+    }
+    if (comment.deleted) {
+      throw new BadRequestError('Cannot react to a deleted comment', 'deleted');
+    }
+
+    const isReelComment =
+      comment.targetType === 'reel' || (Boolean(comment.reelId) && !comment.postId);
+    const target = await this.resolveTarget(
+      viewerId,
+      isReelComment ? 'reel' : 'post',
+      (isReelComment ? comment.reelId : comment.postId).toString()
+    );
+
+    if (
+      comment.authorId !== viewerId &&
+      (await isBlockedPair(viewerId, comment.authorId, this.customDb))
+    ) {
+      throw new BlockedError();
+    }
+
+    const inserted = await this.repo.addReaction(commentId, emoji, viewerId);
+    const reactions = await this.repo.getReactionsSummary(commentId);
+
+    if (inserted) {
+      const targetIdStr = target.targetId.toString();
+      const nowIso = new Date().toISOString();
+      const streamPayload = {
+        commentId: commentId.toString(),
+        postId: targetIdStr,
+        emoji,
+        userId: viewerId,
+        at: nowIso,
+      };
+      await this.publisher.publishCommentReactionAdded(streamPayload);
+      await this.notifyCommentWsRecipients(
+        target,
+        viewerId,
+        'core.comment.reaction.added',
+        {
+          ...streamPayload,
+          targetType: target.targetType,
+          ...(target.targetType === 'reel' ? { reelId: targetIdStr } : {}),
+          parentCommentId: comment.parentCommentId ? comment.parentCommentId.toString() : null,
+          reactions,
+        },
+        [comment.authorId]
+      );
+      await this.invalidateDepthCache(target.ownerId, target.targetType, targetIdStr);
+    }
+
+    return { reactions };
+  }
+
+  async removeCommentReaction(
+    viewerId: string,
+    commentIdStr: string,
+    rawEmoji: string
+  ): Promise<{ reactions: CommentReactionSummary[] }> {
+    const commentId = this.parseObjectId(commentIdStr, 'Comment');
+    const emoji = validateCommentEmoji(rawEmoji);
+
+    const comment = await this.repo.getCommentById(commentId);
+    if (!comment) {
+      throw new NotFoundError('Comment not found', 'comment_not_found');
+    }
+    if (comment.deleted) {
+      return { reactions: [] };
+    }
+
+    const isReelComment =
+      comment.targetType === 'reel' || (Boolean(comment.reelId) && !comment.postId);
+    const target = await this.resolveTarget(
+      viewerId,
+      isReelComment ? 'reel' : 'post',
+      (isReelComment ? comment.reelId : comment.postId).toString()
+    );
+
+    if (
+      comment.authorId !== viewerId &&
+      (await isBlockedPair(viewerId, comment.authorId, this.customDb))
+    ) {
+      throw new BlockedError();
+    }
+
+    const removed = await this.repo.removeReaction(commentId, emoji, viewerId);
+    const reactions = await this.repo.getReactionsSummary(commentId);
+
+    if (removed) {
+      const targetIdStr = target.targetId.toString();
+      const nowIso = new Date().toISOString();
+      const streamPayload = {
+        commentId: commentId.toString(),
+        postId: targetIdStr,
+        emoji,
+        userId: viewerId,
+        at: nowIso,
+      };
+      await this.publisher.publishCommentReactionRemoved(streamPayload);
+      await this.notifyCommentWsRecipients(
+        target,
+        viewerId,
+        'core.comment.reaction.removed',
+        {
+          ...streamPayload,
+          targetType: target.targetType,
+          ...(target.targetType === 'reel' ? { reelId: targetIdStr } : {}),
+          parentCommentId: comment.parentCommentId ? comment.parentCommentId.toString() : null,
+          reactions,
+        },
+        [comment.authorId]
+      );
+      await this.invalidateDepthCache(target.ownerId, target.targetType, targetIdStr);
+    }
+
+    return { reactions };
+  }
+
+  async getCommentReactions(
+    viewerId: string | undefined,
+    commentIdStr: string
+  ): Promise<{ reactions: CommentReactionSummary[] }> {
+    const commentId = this.parseObjectId(commentIdStr, 'Comment');
+    const comment = await this.repo.getCommentById(commentId);
+    if (!comment) {
+      throw new NotFoundError('Comment not found', 'comment_not_found');
+    }
+
+    if (viewerId) {
+      const isReelComment =
+        comment.targetType === 'reel' || (Boolean(comment.reelId) && !comment.postId);
+      await this.resolveTarget(
+        viewerId,
+        isReelComment ? 'reel' : 'post',
+        (isReelComment ? comment.reelId : comment.postId).toString()
+      );
+      if (
+        comment.authorId !== viewerId &&
+        (await isBlockedPair(viewerId, comment.authorId, this.customDb))
+      ) {
+        throw new BlockedError();
+      }
+    }
+
+    if (comment.deleted) {
+      return { reactions: [] };
+    }
+
+    const reactions = await this.repo.getReactionsSummary(commentId);
+    return { reactions };
   }
 }
 

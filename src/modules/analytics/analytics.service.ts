@@ -21,6 +21,7 @@ import {
 } from '../../db/mongo.js';
 import { computePublicUrl, resolveMediaUrl } from '../../lib/r2.js';
 import { getRedisClient } from '../../db/redis.js';
+import { defaultEngagementDepthService } from './engagement-depth.js';
 import { REEL_VIEWS_BUFFER_KEY } from '../../jobs/reel-jobs.js';
 import { BlockedError, ForbiddenError, NotFoundError } from '../../utils/errors.js';
 import { isBlockedPair } from '../social/block-filter.js';
@@ -359,6 +360,19 @@ export class AnalyticsService {
         },
       }
     );
+
+    if (input.watchedSeconds >= 5) {
+      await defaultEngagementDepthService.recordEngagementEvent(
+        {
+          contentType: existing.contentType,
+          contentId: existing.contentId,
+          userId: viewerId,
+          event: 'view_long',
+          refId: `view_long:${oid.toString()}`,
+        },
+        this.db()
+      );
+    }
   }
 
   async endView(
@@ -397,6 +411,19 @@ export class AnalyticsService {
         },
       }
     );
+
+    if (input.watchedSeconds >= 5) {
+      await defaultEngagementDepthService.recordEngagementEvent(
+        {
+          contentType: existing.contentType,
+          contentId: existing.contentId,
+          userId: viewerId,
+          event: 'view_long',
+          refId: `view_long:${oid.toString()}`,
+        },
+        this.db()
+      );
+    }
   }
 
   async recordProfileVisit(visitorId: string, visitedUserId: string): Promise<boolean> {

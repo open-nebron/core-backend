@@ -27,6 +27,16 @@ export async function authenticateRequest(
   await checkUserBanned(user.userId);
 }
 
+export async function optionalAuthenticateRequest(
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> {
+  if (!request.headers.authorization) {
+    return;
+  }
+  await authenticateRequest(request, reply);
+}
+
 export async function requireAdmin(
   request: FastifyRequest,
   reply: FastifyReply

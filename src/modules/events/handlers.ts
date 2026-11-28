@@ -1,10 +1,11 @@
-import { ObjectId } from 'mongodb';
+import { ObjectId, type Db } from 'mongodb';
 import { profileService } from '../profiles/profile.service.js';
 import { getPostsCollection, getReelsCollection } from '../../db/mongo.js';
 import { defaultSocialSearchService, extractSocialHashtags } from '../search/meili.service.js';
+import { defaultEngagementDepthService } from '../analytics/engagement-depth.js';
 import type { UserRegisteredPayload, NebronEvent } from './types.js';
 
-export async function handleEvent(event: NebronEvent): Promise<void> {
+export async function handleEvent(event: NebronEvent, customDb?: Db): Promise<void> {
   switch (event.type) {
     case 'auth.user.registered': {
       const data = event.data as UserRegisteredPayload;
@@ -100,7 +101,14 @@ export async function handleEvent(event: NebronEvent): Promise<void> {
     }
 
     default: {
-      console.log(`[EventConsumer] Unhandled event type '${event.type}' - skipping`);
+      const handledEngagement = await defaultEngagementDepthService.ingestStreamEvent(
+        event.type,
+        event.data,
+        customDb
+      );
+      if (!handledEngagement) {
+        console.log(`[EventConsumer] Unhandled event type '${event.type}' - skipping`);
+      }
       break;
     }
   }

@@ -1,12 +1,17 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
-import { authenticateRequest } from '../../../auth/hook.js';
-import { createCommentRateLimiter } from '../../../plugins/rate-limit.js';
+import { authenticateRequest, optionalAuthenticateRequest } from '../../../auth/hook.js';
+import {
+  commentReactionReadRateLimiter,
+  commentReactionWriteRateLimiter,
+  createCommentRateLimiter,
+} from '../../../plugins/rate-limit.js';
 import {
   createCommentSchema,
   editCommentSchema,
   commentsQuerySchema,
   commentRepliesQuerySchema,
   commentIdParamSchema,
+  commentReactionParamsSchema,
   postIdParamSchema,
   pinCommentParamSchema,
 } from '../validate.js';
@@ -28,6 +33,11 @@ interface PostIdParams {
 
 interface CommentIdParams {
   id: string;
+}
+
+interface CommentReactionParams {
+  id: string;
+  emoji: string;
 }
 
 interface PinCommentParams {
@@ -67,6 +77,27 @@ const replyToUserSchema = {
   required: ['userId', 'username'],
 };
 
+const reactionSummaryItemSchema = {
+  type: 'object',
+  properties: {
+    emoji: { type: 'string' },
+    count: { type: 'integer' },
+    userIds: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['emoji', 'count', 'userIds'],
+};
+
+const reactionsResponseSchema = {
+  type: 'object',
+  properties: {
+    reactions: {
+      type: 'array',
+      items: reactionSummaryItemSchema,
+    },
+  },
+  required: ['reactions'],
+};
+
 const commentItemSchema = {
   type: 'object',
   properties: {
@@ -92,6 +123,10 @@ const commentItemSchema = {
     deleted: { type: 'boolean' },
     createdAt: { type: 'string' },
     author: authorSchema,
+    reactions: {
+      type: 'array',
+      items: reactionSummaryItemSchema,
+    },
   },
   required: ['id', 'body', 'likeCount', 'replyCount', 'likedByViewer', 'createdAt', 'author'],
 };
@@ -482,6 +517,102 @@ export const commentRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
       const parsedParams = commentIdParamSchema.parse(request.params);
       await defaultCommentService.deleteComment(viewerId, parsedParams.id);
       return reply.status(204).send();
+    }
+  );
+
+  // 10. PUT /comments/:id/reactions/:emoji
+  app.put<{ Params: CommentReactionParams }>(
+    '/comments/:id/reactions/:emoji',
+    {
+      preHandler: [authenticateRequest, commentReactionWriteRateLimiter],
+      schema: {
+        description: 'Add an emoji reaction to a comment (idempotent)',
+        tags: ['Social - Comments'],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            emoji: { type: 'string' },
+          },
+          required: ['id', 'emoji'],
+        },
+        response: {
+          200: reactionsResponseSchema,
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: CommentReactionParams }>, reply: FastifyReply) => {
+      const viewerId = request.user.userId;
+      const parsedParams = commentReactionParamsSchema.parse(request.params);
+      const summary = await defaultCommentService.addCommentReaction(
+        viewerId,
+        parsedParams.id,
+        parsedParams.emoji
+      );
+      return reply.status(200).send(summary);
+    }
+  );
+
+  // 11. DELETE /comments/:id/reactions/:emoji
+  app.delete<{ Params: CommentReactionParams }>(
+    '/comments/:id/reactions/:emoji',
+    {
+      preHandler: [authenticateRequest, commentReactionWriteRateLimiter],
+      schema: {
+        description: 'Remove caller emoji reaction from a comment (idempotent)',
+        tags: ['Social - Comments'],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            emoji: { type: 'string' },
+          },
+          required: ['id', 'emoji'],
+        },
+        response: {
+          200: reactionsResponseSchema,
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: CommentReactionParams }>, reply: FastifyReply) => {
+      const viewerId = request.user.userId;
+      const parsedParams = commentReactionParamsSchema.parse(request.params);
+      const summary = await defaultCommentService.removeCommentReaction(
+        viewerId,
+        parsedParams.id,
+        parsedParams.emoji
+      );
+      return reply.status(200).send(summary);
+    }
+  );
+
+  // 12. GET /comments/:id/reactions (public read; block-filtered if authenticated)
+  app.get<{ Params: CommentIdParams }>(
+    '/comments/:id/reactions',
+    {
+      preHandler: [optionalAuthenticateRequest, commentReactionReadRateLimiter],
+      schema: {
+        description: 'Get reaction summary for a comment',
+        tags: ['Social - Comments'],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+          },
+          required: ['id'],
+        },
+        response: {
+          200: reactionsResponseSchema,
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: CommentIdParams }>, reply: FastifyReply) => {
+      const parsedParams = commentIdParamSchema.parse(request.params);
+      const summary = await defaultCommentService.getCommentReactions(
+        request.user?.userId,
+        parsedParams.id
+      );
+      return reply.status(200).send(summary);
     }
   );
 };

@@ -1,6 +1,10 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { authenticateRequest } from '../../auth/hook.js';
-import { analyticsBeaconRateLimiter } from '../../plugins/rate-limit.js';
+import {
+  analyticsBeaconRateLimiter,
+  analyticsDepthRateLimiter,
+} from '../../plugins/rate-limit.js';
+import { defaultEngagementDepthService } from './engagement-depth.js';
 import {
   analyticsListQuerySchema,
   analyticsPeriodQuerySchema,
@@ -314,6 +318,34 @@ export const analyticsRoutes: FastifyPluginAsync = async (app: FastifyInstance) 
         contentType,
         contentId,
         period
+      );
+      return reply.status(200).send(data);
+    }
+  );
+
+  app.get(
+    '/analytics/me/content/:contentType/:contentId/depth',
+    {
+      preHandler: [authenticateRequest, analyticsDepthRateLimiter],
+      schema: {
+        description: 'Get engagement depth metrics and top commenters for a single owned content item',
+        tags: ['Analytics'],
+        params: {
+          type: 'object',
+          required: ['contentType', 'contentId'],
+          properties: {
+            contentType: { type: 'string', enum: ['post', 'reel', 'story'] },
+            contentId: { type: 'string' },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { contentType, contentId } = contentDetailParamsSchema.parse(request.params);
+      const data = await defaultEngagementDepthService.getContentDepth(
+        request.user.userId,
+        contentType,
+        contentId
       );
       return reply.status(200).send(data);
     }

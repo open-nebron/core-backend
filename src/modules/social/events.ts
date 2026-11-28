@@ -106,6 +106,14 @@ export interface CommentUnpinnedPayload {
   at: string;
 }
 
+export interface CommentReactionPayload {
+  commentId: string;
+  postId: string;
+  emoji: string;
+  userId: string;
+  at: string;
+}
+
 export interface UserMentionedPayload {
   userId: string;
   byUserId: string;
@@ -295,6 +303,14 @@ export class SocialEventPublisher {
 
   async publishCommentUnpinned(payload: CommentUnpinnedPayload): Promise<void> {
     await this.publish('core.comment.unpinned', payload);
+  }
+
+  async publishCommentReactionAdded(payload: CommentReactionPayload): Promise<void> {
+    await this.publish('core.comment.reaction.added', payload);
+  }
+
+  async publishCommentReactionRemoved(payload: CommentReactionPayload): Promise<void> {
+    await this.publish('core.comment.reaction.removed', payload);
   }
 
   async publishUserMentioned(payload: UserMentionedPayload): Promise<void> {

@@ -126,6 +126,45 @@ export interface CommentLikeDocument {
   createdAt: Date;
 }
 
+export interface CommentReactionDocument {
+  _id?: any;
+  commentId: ObjectId;
+  emoji: string;
+  userId: string;
+  createdAt: Date;
+}
+
+export interface CommentThreadDepthDocument {
+  _id: ObjectId;
+  commentId: ObjectId;
+  postId: ObjectId;
+  targetType?: 'post' | 'reel';
+  depth: number;
+  authorId: string;
+  createdAt: Date;
+}
+
+export type EngagementEventType =
+  | 'like'
+  | 'comment'
+  | 'reply'
+  | 'reaction'
+  | 'save'
+  | 'share'
+  | 'view_long'
+  | 'dm_share';
+
+export interface EngagementEventDocument {
+  _id?: any;
+  contentType: AnalyticsContentType;
+  contentId: string;
+  userId: string;
+  event: EngagementEventType;
+  emoji?: string;
+  refId?: string;
+  at: Date;
+}
+
 export interface FollowDocument {
   _id?: any;
   followerId: string;
@@ -655,6 +694,45 @@ export async function initMongoIndexes(database: Db): Promise<void> {
     { userId: 1, date: 1 },
     { unique: true, name: 'idx_creator_daily_stats_unique' }
   );
+
+  // V4.5-1 Collections: comment_reactions, comment_thread_depth, engagement_events
+  const commentReactions = database.collection<CommentReactionDocument>('comment_reactions');
+  await commentReactions.createIndex(
+    { commentId: 1, emoji: 1, userId: 1 },
+    { unique: true, name: 'idx_comment_reactions_unique' }
+  );
+  await commentReactions.createIndex({ commentId: 1 }, { name: 'idx_comment_reactions_commentId' });
+
+  const commentThreadDepth = database.collection<CommentThreadDepthDocument>('comment_thread_depth');
+  await commentThreadDepth.createIndex(
+    { postId: 1, depth: 1 },
+    { name: 'idx_comment_thread_depth_postId_depth' }
+  );
+  await commentThreadDepth.createIndex(
+    { authorId: 1, createdAt: -1 },
+    { name: 'idx_comment_thread_depth_authorId_createdAt' }
+  );
+
+  const engagementEvents = database.collection<EngagementEventDocument>('engagement_events');
+  await ensureSafeIndex(
+    engagementEvents,
+    { at: 1 },
+    ttlSeconds !== undefined
+      ? { expireAfterSeconds: ttlSeconds, name: 'idx_engagement_events_at_ttl' }
+      : { name: 'idx_engagement_events_at' }
+  );
+  await engagementEvents.createIndex(
+    { contentType: 1, contentId: 1, event: 1, at: -1 },
+    { name: 'idx_engagement_events_content_event_at' }
+  );
+  await engagementEvents.createIndex(
+    { userId: 1, at: -1 },
+    { name: 'idx_engagement_events_userId_at' }
+  );
+  await engagementEvents.createIndex(
+    { refId: 1 },
+    { unique: true, sparse: true, name: 'idx_engagement_events_refId_unique' }
+  );
 }
 
 export function getDb(): Db {
@@ -766,6 +844,18 @@ export function getAnalyticsDailyCollection(dbInstance?: Db): Collection<Analyti
 
 export function getCreatorDailyStatsCollection(dbInstance?: Db): Collection<CreatorDailyStatsDocument> {
   return (dbInstance ?? getDb()).collection<CreatorDailyStatsDocument>('creator_daily_stats');
+}
+
+export function getCommentReactionsCollection(dbInstance?: Db): Collection<CommentReactionDocument> {
+  return (dbInstance ?? getDb()).collection<CommentReactionDocument>('comment_reactions');
+}
+
+export function getCommentThreadDepthCollection(dbInstance?: Db): Collection<CommentThreadDepthDocument> {
+  return (dbInstance ?? getDb()).collection<CommentThreadDepthDocument>('comment_thread_depth');
+}
+
+export function getEngagementEventsCollection(dbInstance?: Db): Collection<EngagementEventDocument> {
+  return (dbInstance ?? getDb()).collection<EngagementEventDocument>('engagement_events');
 }
 
 export async function runInTransaction<T>(
