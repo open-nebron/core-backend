@@ -18,6 +18,7 @@ import { reportRoutes } from './modules/reports/reports.routes.js';
 import { storyRoutes } from './modules/stories/stories.routes.js';
 import { reelRoutes } from './modules/reels/reels.routes.js';
 import { analyticsRoutes } from './modules/analytics/analytics.routes.js';
+import { adminAnalyticsRoutes } from './modules/admin-analytics/admin-analytics.routes.js';
 import { exploreRoutes } from './modules/explore/explore.routes.js';
 import { searchRoutes } from './modules/search/index.js';
 
@@ -96,6 +97,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(storyRoutes);
   await app.register(reelRoutes);
   await app.register(analyticsRoutes);
+  await app.register(adminAnalyticsRoutes);
   await app.register(exploreRoutes);
   await app.register(searchRoutes);
 

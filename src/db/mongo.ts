@@ -376,6 +376,42 @@ export interface CreatorDailyStatsDocument {
   updatedAt: Date;
 }
 
+export interface PlatformDailyStatsDocument {
+  _id?: any;
+  date: string; // 'YYYY-MM-DD'
+  users: {
+    total: number;
+    new: number;
+    dau: number;
+    wau: number;
+    mau: number;
+    banned: number;
+    verified: number;
+  };
+  content: {
+    postsCreated: number;
+    reelsCreated: number;
+    storiesCreated: number;
+    totalLikes: number;
+    totalComments: number;
+    totalShares: number;
+    totalSaves: number;
+  };
+  chat: {
+    messagesSent: number;
+    conversationsActive: number;
+    callsMade: number;
+    callMinutes: number;
+  };
+  moderation: {
+    reportsCreated: number;
+    reportsResolved: number;
+    usersBanned: number;
+    avgResolutionTimeHours: number;
+  };
+  updatedAt: Date;
+}
+
 let client: MongoClient | null = null;
 let db: Db | null = null;
 
@@ -748,6 +784,13 @@ export async function initMongoIndexes(database: Db): Promise<void> {
     { refId: 1 },
     { unique: true, sparse: true, name: 'idx_engagement_events_refId_unique' }
   );
+
+  // V4.5-3 Platform-wide daily rollup stats
+  const platformDailyStats = database.collection<PlatformDailyStatsDocument>('platform_daily_stats');
+  await platformDailyStats.createIndex(
+    { date: 1 },
+    { unique: true, name: 'idx_platform_daily_stats_date_unique' }
+  );
 }
 
 export function getDb(): Db {
@@ -875,6 +918,10 @@ export function getCommentThreadDepthCollection(dbInstance?: Db): Collection<Com
 
 export function getEngagementEventsCollection(dbInstance?: Db): Collection<EngagementEventDocument> {
   return (dbInstance ?? getDb()).collection<EngagementEventDocument>('engagement_events');
+}
+
+export function getPlatformDailyStatsCollection(dbInstance?: Db): Collection<PlatformDailyStatsDocument> {
+  return (dbInstance ?? getDb()).collection<PlatformDailyStatsDocument>('platform_daily_stats');
 }
 
 export async function runInTransaction<T>(

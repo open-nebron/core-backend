@@ -241,3 +241,9 @@ export const analyticsAudienceActivityRateLimiter = createInsightsRateLimiter('a
 export const analyticsAudienceGrowthRateLimiter = createInsightsRateLimiter('audience_growth');
 export const analyticsAudienceSourcesRateLimiter = createInsightsRateLimiter('audience_sources');
 export const analyticsCrossCompareRateLimiter = createInsightsRateLimiter('cross_compare');
+export const adminAnalyticsRateLimiter = createRedisRateLimiter({
+  limit: 120,
+  windowSeconds: 60,
+  keyPrefix: 'ratelimit:admin_analytics',
+  keyGenerator: userKeyGen,
+});

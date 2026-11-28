@@ -50,16 +50,19 @@ describe('Social & Analytics V4.5-1 — Comment Reactions & Engagement Depth', (
 
   async function clearTestKeys() {
     if (!redis) return;
-    const patterns = [
-      'ratelimit:*',
-      'analytics:depth:*',
-      'impression:*',
-      'rel:blocked:*',
-    ];
-    for (const pattern of patterns) {
-      const keys = await redis.keys(pattern);
-      if (keys.length > 0) await redis.del(...keys);
+    for (const uid of [userA, userB, userC]) {
+      const patterns = [
+        `ratelimit:*:${uid}:*`,
+        `impression:*:${uid}`,
+        `rel:blocked:${uid}`,
+      ];
+      for (const pattern of patterns) {
+        const keys = await redis.keys(pattern);
+        if (keys.length > 0) await redis.del(...keys);
+      }
     }
+    const depthKeys = await redis.keys('analytics:depth:*');
+    if (depthKeys.length > 0) await redis.del(...depthKeys);
   }
 
   async function createPost(token: string, body: string) {

@@ -10,6 +10,10 @@ import {
   startAnalyticsRollupScheduler,
   stopAnalyticsRollupScheduler,
 } from './jobs/analytics-rollup.js';
+import {
+  startPlatformRollupScheduler,
+  stopPlatformRollupScheduler,
+} from './jobs/platform-rollup.js';
 import { defaultSocialSearchService } from './modules/search/meili.service.js';
 
 async function bootstrap() {
@@ -63,6 +67,7 @@ async function bootstrap() {
     startStoryCleanupScheduler();
     startReelJobsScheduler();
     startAnalyticsRollupScheduler();
+    startPlatformRollupScheduler();
     void defaultSocialSearchService.backfillMissing().catch(() => {});
     console.log(`[CoreAPI] Listening on http://0.0.0.0:${env.PORT}`);
     console.log(`[CoreAPI] OpenAPI Documentation available at http://0.0.0.0:${env.PORT}/docs`);
@@ -80,6 +85,7 @@ async function bootstrap() {
         stopStoryCleanupScheduler();
         stopReelJobsScheduler();
         stopAnalyticsRollupScheduler();
+        stopPlatformRollupScheduler();
         await app.close();
         await eventConsumer.stop();
         jwksService.stopBackgroundRefresh();

@@ -43,6 +43,7 @@ const envSchema = z
     AUTH_SERVICE_URL: z.string().default('http://localhost:4001'),
     CHAT_SERVICE_URL: z.string().default('http://localhost:4003'),
     VOICE_SERVICE_URL: z.string().default('http://localhost:4004'),
+    SPACES_SERVICE_URL: z.string().default('http://localhost:4005'),
 
     // Meilisearch
     MEILI_HOST: z.string().default('http://localhost:7700'),
