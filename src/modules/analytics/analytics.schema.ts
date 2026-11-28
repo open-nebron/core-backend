@@ -3,7 +3,51 @@ import type { FollowSourceType } from '../../db/mongo.js';
 
 export const analyticsPeriodSchema = z.enum(['7d', '30d', '90d']).default('30d');
 export const analyticsContentTypeSchema = z.enum(['post', 'reel', 'story']);
-export const analyticsSourceSchema = z.enum(['feed', 'profile', 'explore', 'shared', 'hashtag']);
+export const analyticsSourceSchema = z.enum([
+  'feed',
+  'profile',
+  'explore',
+  'shared',
+  'hashtag',
+  'recommendations',
+]);
+
+export const compareAgainstSchema = z.enum(['7d_ago', '30d_ago', 'previous_post']).default('previous_post');
+
+export const contentCompareQuerySchema = z.object({
+  against: compareAgainstSchema,
+});
+
+export const hashtagAnalyticsQuerySchema = z.object({
+  period: analyticsPeriodSchema,
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+});
+
+export const bestTimeQuerySchema = z.object({
+  contentType: analyticsContentTypeSchema.optional(),
+  period: analyticsPeriodSchema,
+});
+
+export const crossCompareQuerySchema = z.object({
+  contentType: analyticsContentTypeSchema,
+  contentIds: z
+    .string()
+    .trim()
+    .min(1)
+    .transform((s) =>
+      Array.from(
+        new Set(
+          s
+            .split(',')
+            .map((v) => v.trim())
+            .filter(Boolean)
+        )
+      )
+    )
+    .refine((ids) => ids.length >= 1 && ids.length <= 5, {
+      message: 'contentIds must contain 1 to 5 IDs',
+    }),
+});
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 

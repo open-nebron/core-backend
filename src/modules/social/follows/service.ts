@@ -8,6 +8,7 @@ import { getBlockedUserIds, isBlockedPair } from '../block-filter.js';
 import {
   getProfilesCollection,
   getFollowSourcesCollection,
+  getUnfollowEventsCollection,
   getDb,
   getMongoClient,
   runInTransaction,
@@ -125,6 +126,16 @@ export class FollowService {
     });
 
     if (deleted) {
+      try {
+        await getUnfollowEventsCollection(this.customDb ?? getDb()).insertOne({
+          followerId,
+          followingId,
+          at: new Date(),
+        });
+      } catch {
+        // Best-effort non-blocking unfollow tracking
+      }
+
       await this.publisher.publishUserUnfollowed({
         followerId,
         followingId,

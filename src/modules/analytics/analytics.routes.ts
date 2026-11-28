@@ -1,14 +1,30 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { authenticateRequest } from '../../auth/hook.js';
 import {
+  analyticsAudienceActivityRateLimiter,
+  analyticsAudienceGrowthRateLimiter,
+  analyticsAudienceSourcesRateLimiter,
   analyticsBeaconRateLimiter,
+  analyticsBestTimeRateLimiter,
+  analyticsCompareRateLimiter,
+  analyticsCrossCompareRateLimiter,
+  analyticsCurveRateLimiter,
+  analyticsDecayRateLimiter,
   analyticsDepthRateLimiter,
+  analyticsHashtagsRateLimiter,
+  analyticsSpeedRateLimiter,
+  analyticsTrafficRateLimiter,
 } from '../../plugins/rate-limit.js';
 import { defaultEngagementDepthService } from './engagement-depth.js';
+import { defaultAnalyticsInsightsService } from './insights.service.js';
 import {
   analyticsListQuerySchema,
   analyticsPeriodQuerySchema,
+  bestTimeQuerySchema,
+  contentCompareQuerySchema,
   contentDetailParamsSchema,
+  crossCompareQuerySchema,
+  hashtagAnalyticsQuerySchema,
   impressionSchema,
   profileVisitSchema,
   viewEndSchema,
@@ -36,7 +52,10 @@ export const analyticsRoutes: FastifyPluginAsync = async (app: FastifyInstance) 
           properties: {
             contentType: { type: 'string', enum: ['post', 'reel', 'story'] },
             contentId: { type: 'string' },
-            source: { type: 'string', enum: ['feed', 'profile', 'explore', 'shared', 'hashtag'] },
+            source: {
+              type: 'string',
+              enum: ['feed', 'profile', 'explore', 'shared', 'hashtag', 'recommendations'],
+            },
           },
         },
         response: {
@@ -369,6 +388,227 @@ export const analyticsRoutes: FastifyPluginAsync = async (app: FastifyInstance) 
     async (request: FastifyRequest, reply: FastifyReply) => {
       const { period } = analyticsPeriodQuerySchema.parse(request.query);
       const data = await defaultAnalyticsService.getAudienceAnalytics(request.user.userId, period);
+      return reply.status(200).send(data);
+    }
+  );
+
+  // === V4.5-2 Enhanced Per-Content, Hashtag, Timing & Audience Insights ===
+
+  app.get(
+    '/analytics/me/content/:contentType/:contentId/curve',
+    {
+      preHandler: [authenticateRequest, analyticsCurveRateLimiter],
+      schema: {
+        description: 'Get 10% retention drop-off curve (reels/stories) or 7d hourly engagement curve (posts)',
+        tags: ['Analytics'],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { contentType, contentId } = contentDetailParamsSchema.parse(request.params);
+      const data = await defaultAnalyticsInsightsService.getContentCurve(
+        request.user.userId,
+        contentType,
+        contentId
+      );
+      return reply.status(200).send(data);
+    }
+  );
+
+  app.get(
+    '/analytics/me/content/:contentType/:contentId/traffic',
+    {
+      preHandler: [authenticateRequest, analyticsTrafficRateLimiter],
+      schema: {
+        description: 'Get traffic source attribution (impressions + attributed engagements)',
+        tags: ['Analytics'],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { contentType, contentId } = contentDetailParamsSchema.parse(request.params);
+      const data = await defaultAnalyticsInsightsService.getContentTraffic(
+        request.user.userId,
+        contentType,
+        contentId
+      );
+      return reply.status(200).send(data);
+    }
+  );
+
+  app.get(
+    '/analytics/me/content/:contentType/:contentId/compare',
+    {
+      preHandler: [authenticateRequest, analyticsCompareRateLimiter],
+      schema: {
+        description: 'Compare content against previous_post, 7d_ago, or 30d_ago',
+        tags: ['Analytics'],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { contentType, contentId } = contentDetailParamsSchema.parse(request.params);
+      const { against } = contentCompareQuerySchema.parse(request.query);
+      const data = await defaultAnalyticsInsightsService.getCohortComparison(
+        request.user.userId,
+        contentType,
+        contentId,
+        against
+      );
+      return reply.status(200).send(data);
+    }
+  );
+
+  app.get(
+    '/analytics/me/content/:contentType/:contentId/speed',
+    {
+      preHandler: [authenticateRequest, analyticsSpeedRateLimiter],
+      schema: {
+        description: 'Get time-to-first-engagement and half-engagement speed rating',
+        tags: ['Analytics'],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { contentType, contentId } = contentDetailParamsSchema.parse(request.params);
+      const data = await defaultAnalyticsInsightsService.getContentSpeed(
+        request.user.userId,
+        contentType,
+        contentId
+      );
+      return reply.status(200).send(data);
+    }
+  );
+
+  app.get(
+    '/analytics/me/content/:contentType/:contentId/decay',
+    {
+      preHandler: [authenticateRequest, analyticsDecayRateLimiter],
+      schema: {
+        description: 'Get content engagement decay curve by age bucket',
+        tags: ['Analytics'],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { contentType, contentId } = contentDetailParamsSchema.parse(request.params);
+      const data = await defaultAnalyticsInsightsService.getContentDecay(
+        request.user.userId,
+        contentType,
+        contentId
+      );
+      return reply.status(200).send(data);
+    }
+  );
+
+  app.get(
+    '/analytics/me/hashtags',
+    {
+      preHandler: [authenticateRequest, analyticsHashtagsRateLimiter],
+      schema: {
+        description: 'Get hashtag performance relative to creator baseline',
+        tags: ['Analytics'],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { period, limit } = hashtagAnalyticsQuerySchema.parse(request.query);
+      const data = await defaultAnalyticsInsightsService.getHashtagAnalytics(
+        request.user.userId,
+        period,
+        limit
+      );
+      return reply.status(200).send(data);
+    }
+  );
+
+  app.get(
+    '/analytics/me/best-time',
+    {
+      preHandler: [authenticateRequest, analyticsBestTimeRateLimiter],
+      schema: {
+        description: 'Get content-type-aware best time to post recommendations',
+        tags: ['Analytics'],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { contentType, period } = bestTimeQuerySchema.parse(request.query);
+      const data = await defaultAnalyticsInsightsService.getBestTime(
+        request.user.userId,
+        contentType,
+        period
+      );
+      return reply.status(200).send(data);
+    }
+  );
+
+  app.get(
+    '/analytics/me/audience/activity',
+    {
+      preHandler: [authenticateRequest, analyticsAudienceActivityRateLimiter],
+      schema: {
+        description: 'Get follower activity patterns by hour and day of week',
+        tags: ['Analytics'],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { period } = analyticsPeriodQuerySchema.parse(request.query);
+      const data = await defaultAnalyticsInsightsService.getAudienceActivity(
+        request.user.userId,
+        period
+      );
+      return reply.status(200).send(data);
+    }
+  );
+
+  app.get(
+    '/analytics/me/audience/growth',
+    {
+      preHandler: [authenticateRequest, analyticsAudienceGrowthRateLimiter],
+      schema: {
+        description: 'Get daily/weekly/monthly follower growth, churn, and 30d retention',
+        tags: ['Analytics'],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { period } = analyticsPeriodQuerySchema.parse(request.query);
+      const data = await defaultAnalyticsInsightsService.getAudienceGrowth(
+        request.user.userId,
+        period
+      );
+      return reply.status(200).send(data);
+    }
+  );
+
+  app.get(
+    '/analytics/me/audience/sources',
+    {
+      preHandler: [authenticateRequest, analyticsAudienceSourcesRateLimiter],
+      schema: {
+        description: 'Get follower growth attribution sources and stacked daily trend',
+        tags: ['Analytics'],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { period } = analyticsPeriodQuerySchema.parse(request.query);
+      const data = await defaultAnalyticsInsightsService.getAudienceSources(
+        request.user.userId,
+        period
+      );
+      return reply.status(200).send(data);
+    }
+  );
+
+  app.get(
+    '/analytics/me/compare',
+    {
+      preHandler: [authenticateRequest, analyticsCrossCompareRateLimiter],
+      schema: {
+        description: 'Side-by-side comparison of up to 5 content items of the same type',
+        tags: ['Analytics'],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { contentType, contentIds } = crossCompareQuerySchema.parse(request.query);
+      const data = await defaultAnalyticsInsightsService.getCrossContentCompare(
+        request.user.userId,
+        contentType,
+        contentIds
+      );
       return reply.status(200).send(data);
     }
   );

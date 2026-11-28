@@ -268,8 +268,15 @@ export interface ReelLikeDocument {
 }
 
 export type AnalyticsContentType = 'post' | 'reel' | 'story';
-export type AnalyticsSource = 'feed' | 'profile' | 'explore' | 'shared' | 'hashtag';
+export type AnalyticsSource = 'feed' | 'profile' | 'explore' | 'shared' | 'hashtag' | 'recommendations';
 export type FollowSourceType = 'profile' | 'feed' | 'reel' | 'search' | 'suggestion' | 'other';
+
+export interface UnfollowEventDocument {
+  _id?: any;
+  followerId: string;
+  followingId: string;
+  at: Date;
+}
 
 export interface ImpressionDocument {
   _id?: any;
@@ -672,6 +679,10 @@ export async function initMongoIndexes(database: Db): Promise<void> {
   await followSources.createIndex({ followingId: 1, at: -1 }, { name: 'idx_follow_sources_followingId_at' });
   await followSources.createIndex({ followerId: 1, followingId: 1 }, { name: 'idx_follow_sources_pair' });
 
+  const unfollowEvents = database.collection<UnfollowEventDocument>('unfollow_events');
+  await unfollowEvents.createIndex({ followingId: 1, at: -1 }, { name: 'idx_unfollow_events_followingId_at' });
+  await unfollowEvents.createIndex({ followerId: 1, followingId: 1 }, { name: 'idx_unfollow_events_pair' });
+
   const shareEvents = database.collection<ShareEventDocument>('share_events');
   await ensureSafeIndex(
     shareEvents,
@@ -724,6 +735,10 @@ export async function initMongoIndexes(database: Db): Promise<void> {
   await engagementEvents.createIndex(
     { contentType: 1, contentId: 1, event: 1, at: -1 },
     { name: 'idx_engagement_events_content_event_at' }
+  );
+  await engagementEvents.createIndex(
+    { contentType: 1, contentId: 1, at: 1 },
+    { name: 'idx_engagement_events_content_at' }
   );
   await engagementEvents.createIndex(
     { userId: 1, at: -1 },
@@ -832,6 +847,10 @@ export function getProfileVisitsCollection(dbInstance?: Db): Collection<ProfileV
 
 export function getFollowSourcesCollection(dbInstance?: Db): Collection<FollowSourceDocument> {
   return (dbInstance ?? getDb()).collection<FollowSourceDocument>('follow_sources');
+}
+
+export function getUnfollowEventsCollection(dbInstance?: Db): Collection<UnfollowEventDocument> {
+  return (dbInstance ?? getDb()).collection<UnfollowEventDocument>('unfollow_events');
 }
 
 export function getShareEventsCollection(dbInstance?: Db): Collection<ShareEventDocument> {

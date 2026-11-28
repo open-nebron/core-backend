@@ -220,3 +220,24 @@ export const analyticsDepthRateLimiter = createRedisRateLimiter({
   keyPrefix: 'ratelimit:analytics_depth',
   keyGenerator: userKeyGen,
 });
+
+function createInsightsRateLimiter(endpointSlug: string) {
+  return createRedisRateLimiter({
+    limit: 60,
+    windowSeconds: 60,
+    keyPrefix: `ratelimit:analytics_${endpointSlug}`,
+    keyGenerator: userKeyGen,
+  });
+}
+
+export const analyticsCurveRateLimiter = createInsightsRateLimiter('curve');
+export const analyticsTrafficRateLimiter = createInsightsRateLimiter('traffic');
+export const analyticsCompareRateLimiter = createInsightsRateLimiter('compare');
+export const analyticsHashtagsRateLimiter = createInsightsRateLimiter('hashtags');
+export const analyticsSpeedRateLimiter = createInsightsRateLimiter('speed');
+export const analyticsDecayRateLimiter = createInsightsRateLimiter('decay');
+export const analyticsBestTimeRateLimiter = createInsightsRateLimiter('best_time');
+export const analyticsAudienceActivityRateLimiter = createInsightsRateLimiter('audience_activity');
+export const analyticsAudienceGrowthRateLimiter = createInsightsRateLimiter('audience_growth');
+export const analyticsAudienceSourcesRateLimiter = createInsightsRateLimiter('audience_sources');
+export const analyticsCrossCompareRateLimiter = createInsightsRateLimiter('cross_compare');
